@@ -67,3 +67,7 @@ fastlane/screenshots
 fastlane/test_output
 
 .idea/
+
+.build
+.DS_Store
+xcuserdata/
