@@ -7,10 +7,11 @@ let package = Package(
     name: "SwiftLotus",
     dependencies: [
         .package(url: "https://github.com/IBM-Swift/BlueSocket.git", from: "1.0.1"),
+        .package(url: "https://github.com/ankurp/Dollar.git", from: "7.1.0"),
     ],
     targets: [
         .target(
             name: "SwiftLotus",
-            dependencies: ["Socket"])
+            dependencies: ["Socket", "Dollar"])
     ]
 )

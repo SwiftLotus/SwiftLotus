@@ -2,12 +2,30 @@
   "object": {
     "pins": [
       {
+        "package": "Async",
+        "repositoryURL": "https://github.com/duemunk/Async.git",
+        "state": {
+          "branch": null,
+          "revision": "6868449ee0c1da13d48a78ee4d1e3c70170bb74c",
+          "version": "2.0.4"
+        }
+      },
+      {
         "package": "Socket",
         "repositoryURL": "https://github.com/IBM-Swift/BlueSocket.git",
         "state": {
           "branch": null,
           "revision": "db43361274cdabb01ad37315666b5092c3738439",
           "version": "1.0.1"
+        }
+      },
+      {
+        "package": "Dollar",
+        "repositoryURL": "https://github.com/ankurp/Dollar.git",
+        "state": {
+          "branch": null,
+          "revision": "433d4ba9a3bec8aa739f05cb8505527aab7a30e7",
+          "version": "7.1.0"
         }
       }
     ]

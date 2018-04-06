@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		EF15D7AD2077CD7200451DD3 /* Async.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF15D7AC2077CD7200451DD3 /* Async.swift */; };
 		EFD74F90207783F2003C2BF2 /* master.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFD74F8F207783F2003C2BF2 /* master.swift */; };
 		EFD74F92207789DC003C2BF2 /* SwiftLotus.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFD74F91207789DC003C2BF2 /* SwiftLotus.swift */; };
 		OBJ_18 /* Package.swift in Sources */ = {isa = PBXBuildFile; fileRef = OBJ_6 /* Package.swift */; };
@@ -14,6 +15,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		EF15D7AC2077CD7200451DD3 /* Async.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = Async.swift; sourceTree = "<group>"; };
 		EFD74F8F207783F2003C2BF2 /* master.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = master.swift; sourceTree = "<group>"; };
 		EFD74F91207789DC003C2BF2 /* SwiftLotus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwiftLotus.swift; sourceTree = "<group>"; };
 		EFD74F9320778A01003C2BF2 /* SwiftLotus.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = SwiftLotus.h; sourceTree = "<group>"; };
@@ -33,6 +35,14 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		EFDDABED2077CC2E00B52590 /* Utils */ = {
+			isa = PBXGroup;
+			children = (
+				EF15D7AC2077CD7200451DD3 /* Async.swift */,
+			);
+			path = Utils;
+			sourceTree = "<group>";
+		};
 		OBJ_10 /* Tests */ = {
 			isa = PBXGroup;
 			children = (
@@ -61,6 +71,7 @@
 		OBJ_7 /* Sources */ = {
 			isa = PBXGroup;
 			children = (
+				EFDDABED2077CC2E00B52590 /* Utils */,
 				OBJ_8 /* SwiftLotus */,
 			);
 			name = Sources;
@@ -142,6 +153,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 0;
 			files = (
+				EF15D7AD2077CD7200451DD3 /* Async.swift in Sources */,
 				EFD74F92207789DC003C2BF2 /* SwiftLotus.swift in Sources */,
 				OBJ_18 /* Package.swift in Sources */,
 				EFD74F90207783F2003C2BF2 /* master.swift in Sources */,
