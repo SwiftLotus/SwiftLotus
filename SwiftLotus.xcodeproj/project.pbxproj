@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		EFD74F90207783F2003C2BF2 /* master.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFD74F8F207783F2003C2BF2 /* master.swift */; };
 		EFD74F92207789DC003C2BF2 /* SwiftLotus.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFD74F91207789DC003C2BF2 /* SwiftLotus.swift */; };
+		F0B36FB32078539700C68052 /* Daemon.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0B36FB22078539700C68052 /* Daemon.swift */; };
 		OBJ_18 /* Package.swift in Sources */ = {isa = PBXBuildFile; fileRef = OBJ_6 /* Package.swift */; };
 		OBJ_24 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = OBJ_9 /* main.swift */; };
 /* End PBXBuildFile section */
@@ -17,6 +18,7 @@
 		EFD74F8F207783F2003C2BF2 /* master.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = master.swift; sourceTree = "<group>"; };
 		EFD74F91207789DC003C2BF2 /* SwiftLotus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwiftLotus.swift; sourceTree = "<group>"; };
 		EFD74F9320778A01003C2BF2 /* SwiftLotus.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = SwiftLotus.h; sourceTree = "<group>"; };
+		F0B36FB22078539700C68052 /* Daemon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Daemon.swift; sourceTree = "<group>"; };
 		OBJ_6 /* Package.swift */ = {isa = PBXFileReference; explicitFileType = sourcecode.swift; path = Package.swift; sourceTree = "<group>"; };
 		OBJ_9 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		"SwiftLotus::SwiftLotus::Product" /* SwiftLotus */ = {isa = PBXFileReference; lastKnownFileType = text; path = SwiftLotus; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -73,6 +75,7 @@
 				EFD74F9320778A01003C2BF2 /* SwiftLotus.h */,
 				EFD74F91207789DC003C2BF2 /* SwiftLotus.swift */,
 				EFD74F8F207783F2003C2BF2 /* master.swift */,
+				F0B36FB22078539700C68052 /* Daemon.swift */,
 			);
 			name = SwiftLotus;
 			path = Sources/SwiftLotus;
@@ -145,6 +148,7 @@
 				EFD74F92207789DC003C2BF2 /* SwiftLotus.swift in Sources */,
 				OBJ_18 /* Package.swift in Sources */,
 				EFD74F90207783F2003C2BF2 /* master.swift in Sources */,
+				F0B36FB32078539700C68052 /* Daemon.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
