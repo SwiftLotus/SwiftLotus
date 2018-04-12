@@ -299,7 +299,7 @@ public class Master {
     /// Install signal handler.
     /// 信号处理
     fileprivate static func installSignal() {
-        
+        trap(Signal.INT, action: self.signalHandler);
     }
     
     /// Reinstall signal handler.
@@ -310,7 +310,7 @@ public class Master {
     /// Signal handler.
     ///
     /// - Returns: signal
-    static func signalHandler() -> Int {
+    static func signalHandler(signal: Int) {
         return 0
     }
     
