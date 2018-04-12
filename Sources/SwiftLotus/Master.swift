@@ -1,5 +1,5 @@
 //
-//  master.swift
+//  Master.swift
 //  SwiftLotusPackageDescription
 //
 //  Created by billchan on 06/04/2018.
@@ -36,7 +36,7 @@ enum Status {
     case reloading
 }
 
-public class master {
+public class Master {
     
     /// Worker id.
     var id: Int = 0
@@ -195,32 +195,35 @@ public class master {
     fileprivate static var isGracefulStop: Bool = false
     
     /// Run all worker instances
-    static func runAll() {
-        self.checkSapiEnv()
+    static func run() {
+        self.checkEnv()
         self.commonInit()
         self.parseCommand()
         self.daemonize()
-        self.initWorkers()
+        self.initSocket()
         self.installSignal()
-        self.saveMasterPid()
+//        self.saveMasterPid()，保存主进程id，放到commonInit里面去
         self.displayUI()
         self.forkWorkers()
         self.resetStd()
         self.monitorWorkers()
     }
     
-    /// Check sapi.
-    fileprivate static func checkSapiEnv() {
+    /// Check Env.
+    /// 查看环境变量
+    fileprivate static func checkEnv() {
         
     }
     
     /// Common Init.
+    /// 初始化pid，日志，统计，和设置主进程名称
     fileprivate static func commonInit() {
         
     }
     
-    /// Init All worker instances.
-    fileprivate static func initWorkers() {
+    /// Init Socket
+    /// 建立socket连接，阻塞在listen中
+    fileprivate static func initSocket() {
         
     }
     
@@ -255,7 +258,7 @@ public class master {
     }
     
     /// Parse command.
-    /// php yourfile.php start | stop | restart | reload | status [-d]
+    /// 解析命令行参数:  start,  stop,  restart,  reload,  status,  connections
     fileprivate static func parseCommand() {
         
     }
@@ -266,6 +269,7 @@ public class master {
     }
     
     /// Install signal handler.
+    /// 信号处理
     fileprivate static func installSignal() {
         
     }
@@ -306,7 +310,7 @@ public class master {
     
     /// Fork some worker processes.
     fileprivate static func forkWorkers() {
-        switch master.os {
+        switch Master.os {
             case .linux:
                 // TODO: forkWorkersForLinux
                 break
@@ -321,14 +325,14 @@ public class master {
     
     /// Redirect standard input and output.
     fileprivate static func resetStd() {
-        if !master.isDaemonize || master.os != .linux {
+        if !Master.isDaemonize || Master.os != .linux {
             return
         }
         // TODO: reset file std
     }
     
     fileprivate static func monitorWorkers() {
-        switch master.os {
+        switch Master.os {
             case .linux:
                 // TODO: monitorWorkersForLinux
                 break

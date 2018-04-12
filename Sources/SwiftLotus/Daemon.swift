@@ -4,9 +4,6 @@
 //
 //  Created by 杨晖 on 2018/4/7.
 //
-
-import Foundation
-
 import Foundation
 
 #if os(Linux)

@@ -8,7 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		EF15D7AD2077CD7200451DD3 /* Async.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF15D7AC2077CD7200451DD3 /* Async.swift */; };
-		EFD74F90207783F2003C2BF2 /* master.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFD74F8F207783F2003C2BF2 /* master.swift */; };
+		EFD74F90207783F2003C2BF2 /* Master.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFD74F8F207783F2003C2BF2 /* Master.swift */; };
 		EFD74F92207789DC003C2BF2 /* SwiftLotus.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFD74F91207789DC003C2BF2 /* SwiftLotus.swift */; };
 		F0B36FB32078539700C68052 /* Daemon.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0B36FB22078539700C68052 /* Daemon.swift */; };
 		F0B36FB52078DDAC00C68052 /* UserCommand.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0B36FB42078DDAC00C68052 /* UserCommand.swift */; };
@@ -18,7 +18,7 @@
 
 /* Begin PBXFileReference section */
 		EF15D7AC2077CD7200451DD3 /* Async.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = Async.swift; sourceTree = "<group>"; };
-		EFD74F8F207783F2003C2BF2 /* master.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = master.swift; sourceTree = "<group>"; };
+		EFD74F8F207783F2003C2BF2 /* Master.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Master.swift; sourceTree = "<group>"; };
 		EFD74F91207789DC003C2BF2 /* SwiftLotus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwiftLotus.swift; sourceTree = "<group>"; };
 		EFD74F9320778A01003C2BF2 /* SwiftLotus.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = SwiftLotus.h; sourceTree = "<group>"; };
 		F0B36FB22078539700C68052 /* Daemon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Daemon.swift; sourceTree = "<group>"; };
@@ -87,7 +87,7 @@
 				OBJ_9 /* main.swift */,
 				EFD74F9320778A01003C2BF2 /* SwiftLotus.h */,
 				EFD74F91207789DC003C2BF2 /* SwiftLotus.swift */,
-				EFD74F8F207783F2003C2BF2 /* master.swift */,
+				EFD74F8F207783F2003C2BF2 /* Master.swift */,
 				F0B36FB22078539700C68052 /* Daemon.swift */,
 				F0B36FB42078DDAC00C68052 /* UserCommand.swift */,
 			);
@@ -163,7 +163,7 @@
 				EF15D7AD2077CD7200451DD3 /* Async.swift in Sources */,
 				EFD74F92207789DC003C2BF2 /* SwiftLotus.swift in Sources */,
 				OBJ_18 /* Package.swift in Sources */,
-				EFD74F90207783F2003C2BF2 /* master.swift in Sources */,
+				EFD74F90207783F2003C2BF2 /* Master.swift in Sources */,
 				F0B36FB32078539700C68052 /* Daemon.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
