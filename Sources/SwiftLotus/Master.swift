@@ -205,6 +205,10 @@ public class Master {
     fileprivate static var family: Socket.ProtocolFamily = .inet
     fileprivate static var port: Int32 = 9527
 
+    fileprivate static var signalHandler: SigactionHandler = { signal in
+        print("Received HUP signal, reread config file")
+    }
+
     /// Run all worker instances
     static func run() {
         self.checkEnv()
@@ -299,20 +303,15 @@ public class Master {
     /// Install signal handler.
     /// 信号处理
     fileprivate static func installSignal() {
-        trap(Signal.INT, action: self.signalHandler);
+        trap(signalNumber: Signal.INT, action: self.signalHandler);
     }
     
     /// Reinstall signal handler.
     fileprivate static func reinstallSignal() {
         
     }
-    
-    /// Signal handler.
-    ///
-    /// - Returns: signal
-    static func signalHandler(signal: Int) {
-        return 0
-    }
+
+
     
     /// Run as deamon mode.
     fileprivate static func daemonize() {

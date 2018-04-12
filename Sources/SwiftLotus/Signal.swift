@@ -24,5 +24,12 @@ func trap(signalNumber:Signal, action:SigactionHandler) {
 
     sigAction.__sigaction_handler = unsafeBitCast(action, sigaction.__Unnamed_union___sigaction_handler.self)
 
-    sigaction(signum.rawValue, &sigAction, nil)
+    sigaction(signalNumber.rawValue, &sigAction, nil)
 }
+
+
+//typealias SignalHandler = __sighandler_t
+//
+//func trap(signum:Signal, action:SignalHandler) {
+//    signal(signum.rawValue, action)
+//}
