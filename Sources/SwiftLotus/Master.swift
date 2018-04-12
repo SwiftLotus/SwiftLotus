@@ -6,6 +6,12 @@
 //
 
 import Foundation
+import Socket
+
+#if os(Linux)
+import Glibc
+#endif
+
 
 fileprivate let killWorkerTimerTime: Int = 2
 fileprivate let defaultBackLogLength: Int = 102400
@@ -193,7 +199,12 @@ public class Master {
     
     /// Graceful stop or not.
     fileprivate static var isGracefulStop: Bool = false
-    
+
+
+    fileprivate static var listenSocket: Socket? = nil
+    fileprivate static var family: Socket.ProtocolFamily = .inet
+    fileprivate static var port: Int32 = 9527
+
     /// Run all worker instances
     static func run() {
         self.checkEnv()
@@ -224,7 +235,24 @@ public class Master {
     /// Init Socket
     /// 建立socket连接，阻塞在listen中
     fileprivate static func initSocket() {
-        
+        do {
+            try self.listenSocket = Socket.create(family: family)
+
+            guard let listener = self.listenSocket else {
+                print("Unable to unwrap socket...")
+                return
+            }
+            try listener.listen(on: Int(self.port), maxBacklogSize: 10)
+        } catch let error {
+
+            guard let socketError = error as? Socket.Error else {
+                print("Unexpected error...")
+                return
+            }
+
+            print("serverHelper Error reported: \(socketError.description)")
+        }
+
     }
     
     /// Get all worker instances.
