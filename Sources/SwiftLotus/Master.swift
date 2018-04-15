@@ -122,8 +122,8 @@ public class Master {
     /// Log file.
     static var logFile: String = ""
     
-    /// Global event loop.
-    static var globalEvent: EventLoop?
+//    /// Global event loop.
+//    static var globalEvent: EventLoop?
     
     /// Emitted when the master process get reload signal.
     static var onMasterReload: (()->())?

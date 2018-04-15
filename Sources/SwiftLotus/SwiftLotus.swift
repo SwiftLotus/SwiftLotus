@@ -9,6 +9,8 @@ import Foundation
 
 class SwiftLotus {
     
+    static let version: String = "0.0.1"
+    
     
     
 }
