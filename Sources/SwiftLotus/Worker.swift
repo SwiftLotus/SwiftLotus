@@ -19,6 +19,21 @@ enum WorkerEventLoop {
     func loop() {
         // TODO:
     }
+    
+    func add() {
+        // TODO:
+    }
+    
+    func del() {
+        // TODO:
+    }
+}
+
+enum WorkerTransport {
+    case tcp
+    case udp
+    case unix
+    case ssl
 }
 
 import Foundation
@@ -35,10 +50,19 @@ public class Worker {
     fileprivate var mainSocket: AnyObject?
     
     /// Graceful stop or not.
-    fileprivate static var gracefulStop: Bool = false
+    fileprivate static var isGracefulStop: Bool = false
+    
+    /// Pause accept new connections or not.
+    fileprivate var isPauseAccept: Bool = true
+    
+    /// Transport layer protocol.
+    var transport: WorkerTransport = .tcp
     
     /// Store all connections of clients.
     var connections: [AnyObject] = []
+    
+    /// Emitted when a socket connection is successfully established.
+    var onConnect: (()->())?
     
     /// Emitted when data is received.
     var onMessage: (()->())?
@@ -110,7 +134,7 @@ public class Worker {
         self.unlisten()
 
         // Close all connections for the worker.
-        if !Worker.gracefulStop {
+        if !Worker.isGracefulStop {
             for connection in self.connections {
                 // connection.close()
             }
@@ -123,6 +147,47 @@ public class Worker {
         self.onBufferDrain = nil
         self.onBufferFull = nil
 
+    }
+    
+    /// Accept a connection.
+    func acceptConnection() {
+        
+        // Accept a connection on server socket.
+        // TODO:
+        
+        // Thundering herd.
+        // TODO:
+        
+        // TcpConnection.
+        // TODO:
+        
+        // Try to emit onConnect callback.
+        if let onConnect = self.onConnect {
+            onConnect()
+        }
+        
+    }
+    
+    /// For udp package.
+    func acceptUdpConnection() {
+        
+        // Accept a connection on server socket.
+        // TODO:
+        
+        // Thundering herd.
+        // TODO:
+        
+        // UdpConnection.
+        // TODO:
+        
+        // Discard bad packets.
+        // TODO:
+        
+        // Try to emit onMessage callback.
+        if let onMessage = self.onMessage {
+            onMessage()
+        }
+        
     }
     
     /// Listen.
@@ -148,11 +213,25 @@ public class Worker {
     /// Resume accept new connections.
     func resumeAccept() {
         // Register a listener to be notified when server socket is ready to read.
+        if let globalEvent = Worker.globalEvent, let _ = self.mainSocket, self.isPauseAccept {
+            if transport != .udp {
+                globalEvent.add()
+            } else {
+                globalEvent.add()
+            }
+        }
+        
+        self.isPauseAccept = false
+    
     }
     
     /// Pause accept new connections.
     func pauseAccept() {
-        
+        if let globalEvent = Worker.globalEvent, let _ = self.mainSocket, self.isPauseAccept {
+            // TODO: delete mainSocket read event
+            globalEvent.del()
+            self.isPauseAccept = true
+        }
     }
     
     /// Reinstall signal handler.
