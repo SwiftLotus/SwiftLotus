@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:SwiftLotus}",
+            "name": "Debug SwiftLotusExample",
+            "target": "SwiftLotusExample",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug SwiftLotusExample"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:SwiftLotus}",
+            "name": "Release SwiftLotusExample",
+            "target": "SwiftLotusExample",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release SwiftLotusExample"
+        }
+    ]
+}
