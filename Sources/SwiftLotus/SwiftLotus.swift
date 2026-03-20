@@ -4,6 +4,7 @@ import NIOSSL
 import Logging
 import Foundation
 import Dispatch
+import NIOConcurrencyHelpers
 
 /// The main worker class that manages the server and connection lifecycle.
 /// Renamed from Lotus to SwiftLotus.
@@ -12,7 +13,7 @@ public final class SwiftLotus<P: ProtocolInterface>: @unchecked Sendable {
     // MARK: - Configuration
     
     public var name: String
-    public var count: Int = System.coreCount
+    public var count: Int
     public let uri: String
     
     /// SSL Context for enabling TLS/SSL
@@ -20,24 +21,59 @@ public final class SwiftLotus<P: ProtocolInterface>: @unchecked Sendable {
     
     // MARK: - Callbacks
     
-    public var onConnect: (@Sendable (Connection<P>) async -> Void)?
-    public var onMessage: (@Sendable (Connection<P>, P.Message) async -> Void)?
-    public var onClose: (@Sendable (Connection<P>) async -> Void)?
+    private let lock = NIOLock()
+    
+    private var _onConnect: (@Sendable (Connection<P>) async -> Void)?
+    public var onConnect: (@Sendable (Connection<P>) async -> Void)? {
+        get { lock.withLock { _onConnect } }
+        set { lock.withLock { _onConnect = newValue } }
+    }
+    
+    private var _onMessage: (@Sendable (Connection<P>, P.Message) async -> Void)?
+    public var onMessage: (@Sendable (Connection<P>, P.Message) async -> Void)? {
+        get { lock.withLock { _onMessage } }
+        set { lock.withLock { _onMessage = newValue } }
+    }
+    
+    private var _onClose: (@Sendable (Connection<P>) async -> Void)?
+    public var onClose: (@Sendable (Connection<P>) async -> Void)? {
+        get { lock.withLock { _onClose } }
+        set { lock.withLock { _onClose = newValue } }
+    }
     
     // MARK: - Internals
+    
+    // Protect connections dictionary
+    private let connectionsLock = NIOLock()
+    private var _connections: [UUID: Connection<P>] = [:]
+    
+    /// Global array of active connections to this worker
+    public var connections: [UUID: Connection<P>] {
+        get { connectionsLock.withLock { _connections } }
+    }
+    
+    internal func _addConnection(_ conn: Connection<P>) {
+        connectionsLock.withLock { _connections[conn.id] = conn }
+    }
+    
+    internal func _removeConnection(_ conn: Connection<P>) {
+        let _ = connectionsLock.withLock { _connections.removeValue(forKey: conn.id) }
+    }
     
     private let group: MultiThreadedEventLoopGroup
     private let logger = Logger(label: "com.swiftlotus.worker")
     private var host: String = "0.0.0.0"
     private var port: Int = 0
     private var scheme: String = "tcp"
+    private var signalSources: [DispatchSourceSignal] = []
     
     // MARK: - Initialization
     
-    public init(name: String = "SwiftLotus", uri: String) {
+    public init(name: String = "SwiftLotus", count: Int = System.coreCount, uri: String) {
         self.name = name
+        self.count = count
         self.uri = uri
-        self.group = MultiThreadedEventLoopGroup(numberOfThreads: System.coreCount)
+        self.group = MultiThreadedEventLoopGroup(numberOfThreads: count)
         parseUri(uri)
     }
     
@@ -64,15 +100,14 @@ public final class SwiftLotus<P: ProtocolInterface>: @unchecked Sendable {
             .childChannelInitializer { channel in
                 // Add SSL Handler if context exists
                 if let context = self.sslContext {
-                    do {
-                         let sslHandler = NIOSSLServerHandler(context: context)
-                         _ = channel.pipeline.addHandler(sslHandler)
-                    } 
+                    let sslHandler = NIOSSLServerHandler(context: context)
+                    return channel.pipeline.addHandler(sslHandler).flatMap {
+                        P.addHandlers(pipeline: channel.pipeline, worker: self)
+                    }
                 }
                 
                 // Delegate to Protocol to configure pipeline
-                P.addHandlers(pipeline: channel.pipeline, worker: self)
-                return channel.eventLoop.makeSucceededFuture(())
+                return P.addHandlers(pipeline: channel.pipeline, worker: self)
             }
             .childChannelOption(ChannelOptions.socketOption(.so_keepalive), value: 1)
         
@@ -85,8 +120,8 @@ public final class SwiftLotus<P: ProtocolInterface>: @unchecked Sendable {
     
     private func setupSignalHandler() {
         #if !os(Windows)
-        let signalQueue = distinctSignalSources(for: [SIGINT, SIGTERM])
-        for source in signalQueue {
+        self.signalSources = distinctSignalSources(for: [SIGINT, SIGTERM])
+        for source in self.signalSources {
             source.setEventHandler {
                 print("\nReceived signal, shutting down...")
                 Task {
@@ -123,7 +158,7 @@ final class LotusDecoder<P: ProtocolInterface>: ByteToMessageDecoder {
     typealias InboundOut = P.Message
     
     func decode(context: ChannelHandlerContext, buffer: inout ByteBuffer) throws -> DecodingState {
-        let pkgLen = P.input(buffer: &buffer)
+        let pkgLen = try P.input(buffer: &buffer)
         if pkgLen == 0 { return .needMoreData }
         
         if pkgLen > 0 {
@@ -160,6 +195,9 @@ final class LotusHandler<P: ProtocolInterface>: ChannelInboundHandler {
     func channelActive(context: ChannelHandlerContext) {
         let conn = Connection<P>(channel: context.channel)
         self.connection = conn
+        
+        worker._addConnection(conn)
+        
         if let onConnect = worker.onConnect {
             Task { await onConnect(conn) }
         }
@@ -175,6 +213,9 @@ final class LotusHandler<P: ProtocolInterface>: ChannelInboundHandler {
     
     func channelInactive(context: ChannelHandlerContext) {
         guard let conn = self.connection else { return }
+        
+        worker._removeConnection(conn)
+        
         if let onClose = worker.onClose {
             Task { await onClose(conn) }
         }

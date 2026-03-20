@@ -6,7 +6,7 @@ public struct TextProtocol: ProtocolInterface {
     public typealias Message = String
     public typealias Response = String
     
-    public static func input(buffer: inout ByteBuffer) -> Int {
+    public static func input(buffer: inout ByteBuffer) throws -> Int {
         if let newlineIndex = buffer.readableBytesView.firstIndex(of: 10) { // 10 is '\n'
             return newlineIndex - buffer.readerIndex + 1
         }

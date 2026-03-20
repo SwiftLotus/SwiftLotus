@@ -6,7 +6,11 @@ public struct FrameProtocol: ProtocolInterface {
     public typealias Message = String
     public typealias Response = String
     
-    public static func input(buffer: inout ByteBuffer) -> Int {
+    public enum FrameError: Error {
+        case payloadTooLarge
+    }
+    
+    public static func input(buffer: inout ByteBuffer) throws -> Int {
         // We need at least 4 bytes for the header
         if buffer.readableBytes < 4 {
             return 0
@@ -15,6 +19,11 @@ public struct FrameProtocol: ProtocolInterface {
         // Read length (without moving reader index yet)
         guard let length = buffer.getInteger(at: buffer.readerIndex, as: UInt32.self) else {
             return 0
+        }
+        
+        // Sanity Check
+        if length > 10 * 1024 * 1024 {
+            throw FrameError.payloadTooLarge
         }
         
         // Total package length = 4 (header) + body length

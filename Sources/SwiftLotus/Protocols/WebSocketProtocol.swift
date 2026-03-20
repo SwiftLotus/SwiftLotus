@@ -20,11 +20,11 @@ public struct WebSocketProtocol: ProtocolInterface {
     public typealias Response = WebSocketFrameWrapper
     
     // Unused
-    public static func input(buffer: inout ByteBuffer) -> Int { 0 }
+    public static func input(buffer: inout ByteBuffer) throws -> Int { 0 }
     public static func decode(buffer: inout ByteBuffer) -> WebSocketFrameWrapper { fatalError() }
     public static func encode(data: WebSocketFrameWrapper, allocator: ByteBufferAllocator) -> ByteBuffer { fatalError() }
     
-    public static func addHandlers(pipeline: ChannelPipeline, worker: SwiftLotus<Self>) {
+    public static func addHandlers(pipeline: ChannelPipeline, worker: SwiftLotus<Self>) -> EventLoopFuture<Void> {
         
         let upgrader = NIOWebSocketServerUpgrader(
             shouldUpgrade: { (channel: Channel, head: HTTPRequestHead) in
@@ -35,16 +35,15 @@ public struct WebSocketProtocol: ProtocolInterface {
             }
         )
         
-        let upgradeConfig = (
+        let upgradeConfig: NIOHTTPServerUpgradeConfiguration = (
             upgraders: [upgrader],
-            completionHandler: { (context: ChannelHandlerContext) in
-                // Remove HTTP handlers after upgrade? 
-                // NIO does this automatically usually.
+            completionHandler: { @Sendable (context: ChannelHandlerContext) in
+                // Remove HTTP handlers after upgrade
             }
         )
         
         // Use withServerUpgrade
-        let _ = pipeline.configureHTTPServerPipeline(
+        return pipeline.configureHTTPServerPipeline(
             withPipeliningAssistance: true,
             withServerUpgrade: upgradeConfig,
             withErrorHandling: true
@@ -74,6 +73,9 @@ final class LotusWebSocketHandler: ChannelInboundHandler {
     func handlerAdded(context: ChannelHandlerContext) {
         let conn = Connection<WebSocketProtocol>(channel: context.channel)
         self.connection = conn
+        
+        worker._addConnection(conn)
+        
         if let onConnect = worker.onConnect {
             Task { await onConnect(conn) }
         }
@@ -104,6 +106,9 @@ final class LotusWebSocketHandler: ChannelInboundHandler {
     
     func channelInactive(context: ChannelHandlerContext) {
         guard let conn = self.connection else { return }
+        
+        worker._removeConnection(conn)
+        
         if let onClose = worker.onClose {
             Task { await onClose(conn) }
         }

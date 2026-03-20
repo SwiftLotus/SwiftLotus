@@ -83,14 +83,14 @@ public struct HttpProtocol: ProtocolInterface {
     public typealias Message = HttpRequest
     public typealias Response = HttpResponse
     
-    public static func addHandlers(pipeline: ChannelPipeline, worker: SwiftLotus<Self>) {
-        let _ = pipeline.configureHTTPServerPipeline(position: .first, withPipeliningAssistance: true, withServerUpgrade: nil, withErrorHandling: true).flatMap {
+    public static func addHandlers(pipeline: ChannelPipeline, worker: SwiftLotus<Self>) -> EventLoopFuture<Void> {
+        return pipeline.configureHTTPServerPipeline(position: .first, withPipeliningAssistance: true, withServerUpgrade: nil, withErrorHandling: true).flatMap {
             pipeline.addHandler(LotusHttpHandler(worker: worker))
         }
     }
     
     // Unused because we override addHandlers
-    public static func input(buffer: inout ByteBuffer) -> Int { 0 }
+    public static func input(buffer: inout ByteBuffer) throws -> Int { 0 }
     public static func decode(buffer: inout ByteBuffer) -> HttpRequest { fatalError() }
     public static func encode(data: HttpResponse, allocator: ByteBufferAllocator) -> ByteBuffer { fatalError() }
 }
@@ -106,6 +106,7 @@ final class LotusHttpHandler: ChannelInboundHandler {
     // State to accumulate body
     var requestHead: HTTPRequestHead?
     var requestBody: String?
+    var bodySize: Int = 0
     
     init(worker: SwiftLotus<HttpProtocol>) {
         self.worker = worker
@@ -114,6 +115,8 @@ final class LotusHttpHandler: ChannelInboundHandler {
     func channelActive(context: ChannelHandlerContext) {
         let conn = Connection<HttpProtocol>(channel: context.channel)
         self.connection = conn
+        
+        worker._addConnection(conn)
         
         if let onConnect = worker.onConnect {
             Task { await onConnect(conn) }
@@ -127,8 +130,14 @@ final class LotusHttpHandler: ChannelInboundHandler {
         case .head(let head):
             self.requestHead = head
             self.requestBody = ""
+            self.bodySize = 0
             
         case .body(let buffer):
+            self.bodySize += buffer.readableBytes
+            if self.bodySize > 10 * 1024 * 1024 { // 10MB limit
+                context.close(promise: nil)
+                return
+            }
             let string = buffer.getString(at: 0, length: buffer.readableBytes) ?? ""
             self.requestBody?.append(string)
             
@@ -152,6 +161,9 @@ final class LotusHttpHandler: ChannelInboundHandler {
     
     func channelInactive(context: ChannelHandlerContext) {
         guard let conn = self.connection else { return }
+        
+        worker._removeConnection(conn)
+        
         if let onClose = worker.onClose {
             Task { await onClose(conn) }
         }

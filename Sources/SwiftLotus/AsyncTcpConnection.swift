@@ -2,6 +2,12 @@ import NIOCore
 import NIOPosix
 import NIOSSL
 import Foundation
+import NIOConcurrencyHelpers
+
+/// A globally shared EventLoopGroup to prevent thread leaks in AsyncTcpConnection
+public enum GlobalEventLoop {
+    public static let sharedGroup = MultiThreadedEventLoopGroup(numberOfThreads: System.coreCount)
+}
 
 /// AsyncTcpConnection allows establishing an asynchronous TCP connection to a remote server.
 public final class AsyncTcpConnection<P: ProtocolInterface>: @unchecked Sendable {
@@ -12,14 +18,35 @@ public final class AsyncTcpConnection<P: ProtocolInterface>: @unchecked Sendable
     
     // MARK: - Callbacks
     
-    public var onConnect: (@Sendable (Connection<P>) async -> Void)?
-    public var onMessage: (@Sendable (Connection<P>, P.Message) async -> Void)?
-    public var onClose: (@Sendable (Connection<P>) async -> Void)?
-    public var onError: (@Sendable (Error) async -> Void)?
+    private let lock = NIOLock()
+    
+    private var _onConnect: (@Sendable (Connection<P>) async -> Void)?
+    public var onConnect: (@Sendable (Connection<P>) async -> Void)? {
+        get { lock.withLock { _onConnect } }
+        set { lock.withLock { _onConnect = newValue } }
+    }
+    
+    private var _onMessage: (@Sendable (Connection<P>, P.Message) async -> Void)?
+    public var onMessage: (@Sendable (Connection<P>, P.Message) async -> Void)? {
+        get { lock.withLock { _onMessage } }
+        set { lock.withLock { _onMessage = newValue } }
+    }
+    
+    private var _onClose: (@Sendable (Connection<P>) async -> Void)?
+    public var onClose: (@Sendable (Connection<P>) async -> Void)? {
+        get { lock.withLock { _onClose } }
+        set { lock.withLock { _onClose = newValue } }
+    }
+    
+    private var _onError: (@Sendable (Error) async -> Void)?
+    public var onError: (@Sendable (Error) async -> Void)? {
+        get { lock.withLock { _onError } }
+        set { lock.withLock { _onError = newValue } }
+    }
     
     // MARK: - Internals
     
-    private let group: MultiThreadedEventLoopGroup
+    private let group: EventLoopGroup
     private var host: String = ""
     private var port: Int = 0
     private var scheme: String = "tcp"
@@ -28,9 +55,7 @@ public final class AsyncTcpConnection<P: ProtocolInterface>: @unchecked Sendable
     public init(uri: String, sslContext: NIOSSLContext? = nil) {
         self.uri = uri
         self.sslContext = sslContext
-        // We use a separate group for the client, or we could share one if passed in.
-        // For simplicity, create a small one.
-        self.group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+        self.group = GlobalEventLoop.sharedGroup
         parseUri(uri)
     }
     

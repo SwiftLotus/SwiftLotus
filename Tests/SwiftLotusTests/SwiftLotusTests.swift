@@ -28,7 +28,7 @@ final class SwiftLotusTests: XCTestCase {
         let allocator = ByteBufferAllocator()
         var buffer = allocator.buffer(string: "Hello\nWorld")
         
-        let len = TextProtocol.input(buffer: &buffer)
+        let len = try! TextProtocol.input(buffer: &buffer)
         XCTAssertEqual(len, 6) // "Hello\n" is 6 chars
     }
     
@@ -77,7 +77,7 @@ final class SwiftLotusTests: XCTestCase {
         XCTAssertEqual(buffer.readableBytes, 4 + 10)
         
         var input = buffer
-        let len = FrameProtocol.input(buffer: &input)
+        let len = try! FrameProtocol.input(buffer: &input)
         XCTAssertEqual(len, 14)
         
         let decoded = FrameProtocol.decode(buffer: &input)

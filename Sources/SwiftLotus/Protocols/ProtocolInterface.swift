@@ -14,13 +14,13 @@ public protocol ProtocolInterface {
     
     /// Add handlers to the channel pipeline.
     /// Default implementation adds LotusDecoder and LotusEncoder.
-    static func addHandlers(pipeline: ChannelPipeline, worker: SwiftLotus<Self>)
+    static func addHandlers(pipeline: ChannelPipeline, worker: SwiftLotus<Self>) -> EventLoopFuture<Void>
     
     // MARK: - Framing & Coding (Optional if addHandlers is overridden)
     
     /// Check the buffer to see if it contains a complete package.
     /// - Returns: The length of the package if complete, or 0 if more data is needed.
-    static func input(buffer: inout ByteBuffer) -> Int
+    static func input(buffer: inout ByteBuffer) throws -> Int
     
     /// Decode the complete package into a high-level message.
     static func decode(buffer: inout ByteBuffer) -> Message
@@ -31,13 +31,13 @@ public protocol ProtocolInterface {
 
 // Default implementation
 public extension ProtocolInterface {
-    static func addHandlers(pipeline: ChannelPipeline, worker: SwiftLotus<Self>) {
-        let _ = pipeline.addHandlers([
+    static func addHandlers(pipeline: ChannelPipeline, worker: SwiftLotus<Self>) -> EventLoopFuture<Void> {
+        return pipeline.addHandlers([
             ByteToMessageHandler(LotusDecoder<Self>()),
             MessageToByteHandler(LotusEncoder<Self>()),
             LotusHandler(worker: worker)
         ])
     }
     
-    static func input(buffer: inout ByteBuffer) -> Int { 0 }
+    static func input(buffer: inout ByteBuffer) throws -> Int { 0 }
 }
