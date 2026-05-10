@@ -1,8 +1,8 @@
-import NIOCore
+@preconcurrency import NIOCore
 
 /// Defines how to handle the byte stream, including framing (splitting packets) and encoding/decoding.
 /// Formerly LotusProtocol / NetProtocol.
-public protocol ProtocolInterface {
+public protocol ProtocolInterface: Sendable {
     
     /// The type of message this protocol produces (e.g., String, HttpRequest)
     associatedtype Message: Sendable
@@ -31,12 +31,19 @@ public protocol ProtocolInterface {
 
 // Default implementation
 public extension ProtocolInterface {
+    static var maxPackageSize: Int { 10 * 1024 * 1024 }
+
     static func addHandlers(pipeline: ChannelPipeline, worker: SwiftLotus<Self>) -> EventLoopFuture<Void> {
-        return pipeline.addHandlers([
-            ByteToMessageHandler(LotusDecoder<Self>()),
-            MessageToByteHandler(LotusEncoder<Self>()),
-            LotusHandler(worker: worker)
-        ])
+        do {
+            try pipeline.syncOperations.addHandlers([
+                ByteToMessageHandler(LotusDecoder<Self>()),
+                MessageToByteHandler(LotusEncoder<Self>()),
+                LotusHandler(worker: worker)
+            ])
+            return pipeline.eventLoop.makeSucceededFuture(())
+        } catch {
+            return pipeline.eventLoop.makeFailedFuture(error)
+        }
     }
     
     static func input(buffer: inout ByteBuffer) throws -> Int { 0 }

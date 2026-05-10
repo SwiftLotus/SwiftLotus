@@ -2,7 +2,25 @@ import XCTest
 import NIOCore
 import NIOPosix
 import NIOHTTP1
+import NIOWebSocket
+import NIOEmbedded
+import NIOConcurrencyHelpers
 @testable import SwiftLotus
+
+final class MessageRecorder: @unchecked Sendable {
+    private let lock = NIOLock()
+    private var values: [String] = []
+
+    func append(_ value: String) {
+        lock.withLock {
+            values.append(value)
+        }
+    }
+
+    var messages: [String] {
+        lock.withLock { values }
+    }
+}
 
 final class SwiftLotusTests: XCTestCase {
     
@@ -30,6 +48,25 @@ final class SwiftLotusTests: XCTestCase {
         
         let len = try! TextProtocol.input(buffer: &buffer)
         XCTAssertEqual(len, 6) // "Hello\n" is 6 chars
+    }
+
+    func testTextProtocolRejectsOversizedLineWithoutDelimiter() {
+        let allocator = ByteBufferAllocator()
+        var buffer = allocator.buffer(capacity: TextProtocol.maxPackageSize + 1)
+        buffer.writeRepeatingByte(65, count: TextProtocol.maxPackageSize + 1)
+
+        XCTAssertThrowsError(try TextProtocol.input(buffer: &buffer)) { error in
+            XCTAssertEqual(error as? SwiftLotusError, .payloadTooLarge(maximum: TextProtocol.maxPackageSize))
+        }
+    }
+
+    func testTextProtocolDecodingRemovesCRLFDelimiter() {
+        let allocator = ByteBufferAllocator()
+        var buffer = allocator.buffer(string: "hello\r\n")
+
+        let decoded = TextProtocol.decode(buffer: &buffer)
+
+        XCTAssertEqual(decoded, "hello")
     }
     
     // MARK: - HttpProtocol Tests
@@ -65,6 +102,60 @@ final class SwiftLotusTests: XCTestCase {
         XCTAssertTrue(cookie?.contains("token=xyz") ?? false)
         XCTAssertTrue(cookie?.contains("Max-Age=3600") ?? false)
     }
+
+    func testHttpSendAddsContentLengthForKnownBody() async throws {
+        let channel = EmbeddedChannel()
+        let connection = Connection<HttpProtocol>(channel: channel)
+
+        try await connection.send(HttpResponse(body: "OK"))
+
+        let part = try XCTUnwrap(try channel.readOutbound(as: HTTPServerResponsePart.self))
+        guard case .head(let head) = part else {
+            return XCTFail("Expected response head")
+        }
+        XCTAssertEqual(head.headers["Content-Length"].first, "2")
+
+        XCTAssertNoThrow(try channel.finish(acceptAlreadyClosed: true))
+    }
+
+    func testHttpSyncMessageHandlerWritesResponseWithoutTaskHop() throws {
+        let worker = SwiftLotus<HttpProtocol>(name: "HTTPFastPathTest", uri: "http://127.0.0.1:0", enableSignalHandlers: false)
+        worker.onMessageSync = { connection, request in
+            var headers = HTTPHeaders()
+            headers.add(name: "Connection", value: request.head.isKeepAlive ? "keep-alive" : "close")
+            connection.writeHTTPResponse(HttpResponse(body: "OK", headers: headers), closeAfterFlush: !request.head.isKeepAlive)
+        }
+
+        let channel = EmbeddedChannel(handler: LotusHttpHandler(worker: worker))
+        channel.pipeline.fireChannelActive()
+
+        var headers = HTTPHeaders()
+        headers.add(name: "Connection", value: "keep-alive")
+        let head = HTTPRequestHead(version: .http1_1, method: .GET, uri: "/", headers: headers)
+
+        try channel.writeInbound(HTTPServerRequestPart.head(head))
+        try channel.writeInbound(HTTPServerRequestPart.end(nil))
+
+        let responseHeadPart = try XCTUnwrap(try channel.readOutbound(as: HTTPServerResponsePart.self))
+        guard case .head(let responseHead) = responseHeadPart else {
+            return XCTFail("Expected response head")
+        }
+        XCTAssertEqual(responseHead.headers["Content-Length"].first, "2")
+        XCTAssertEqual(responseHead.headers["Connection"].first, "keep-alive")
+
+        XCTAssertNoThrow(try channel.finish(acceptAlreadyClosed: true))
+    }
+
+    func testTLSSchemeRequiresSSLContext() async throws {
+        let worker = SwiftLotus<TextProtocol>(uri: "ssl://256.256.256.256:1234", enableSignalHandlers: false)
+
+        do {
+            try await worker.run()
+            XCTFail("Expected TLS context validation to fail before binding")
+        } catch {
+            XCTAssertEqual(error as? SwiftLotusError, .tlsContextRequired(scheme: "ssl"))
+        }
+    }
     
     // MARK: - FrameProtocol Tests
     
@@ -82,6 +173,32 @@ final class SwiftLotusTests: XCTestCase {
         
         let decoded = FrameProtocol.decode(buffer: &input)
         XCTAssertEqual(decoded, "SwiftLotus")
+    }
+
+    // MARK: - WebSocket Tests
+
+    func testWebSocketFragmentedTextMessageIsDeliveredOnceWhenFinalFrameArrives() throws {
+        let worker = SwiftLotus<WebSocketProtocol>(name: "WebSocketTest", uri: "websocket://127.0.0.1:0", enableSignalHandlers: false)
+        let expectation = expectation(description: "fragmented websocket message")
+        let receivedMessages = MessageRecorder()
+
+        worker.onMessage = { _, frame in
+            receivedMessages.append(frame.string)
+            expectation.fulfill()
+        }
+
+        let channel = EmbeddedChannel(handler: LotusWebSocketHandler(worker: worker))
+        let first = channel.allocator.buffer(string: "hello ")
+        let second = channel.allocator.buffer(string: "world")
+
+        try channel.writeInbound(WebSocketFrame(fin: false, opcode: .text, data: first))
+        XCTAssertTrue(receivedMessages.messages.isEmpty)
+
+        try channel.writeInbound(WebSocketFrame(fin: true, opcode: .continuation, data: second))
+        wait(for: [expectation], timeout: 1.0)
+
+        XCTAssertEqual(receivedMessages.messages, ["hello world"])
+        XCTAssertNoThrow(try channel.finish(acceptAlreadyClosed: true))
     }
     
     // MARK: - Integration Test (Mock)

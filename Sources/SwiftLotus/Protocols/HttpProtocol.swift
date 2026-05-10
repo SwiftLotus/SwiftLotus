@@ -1,5 +1,5 @@
-import NIOCore
-import NIOHTTP1
+@preconcurrency import NIOCore
+@preconcurrency import NIOHTTP1
 import Foundation
 
 /// A wrapper to conform to Sendable for HTTP Requests
@@ -84,8 +84,12 @@ public struct HttpProtocol: ProtocolInterface {
     public typealias Response = HttpResponse
     
     public static func addHandlers(pipeline: ChannelPipeline, worker: SwiftLotus<Self>) -> EventLoopFuture<Void> {
-        return pipeline.configureHTTPServerPipeline(position: .first, withPipeliningAssistance: true, withServerUpgrade: nil, withErrorHandling: true).flatMap {
-            pipeline.addHandler(LotusHttpHandler(worker: worker))
+        do {
+            try pipeline.syncOperations.configureHTTPServerPipeline(position: .first, withPipeliningAssistance: true, withServerUpgrade: nil, withErrorHandling: true)
+            try pipeline.syncOperations.addHandler(LotusHttpHandler(worker: worker))
+            return pipeline.eventLoop.makeSucceededFuture(())
+        } catch {
+            return pipeline.eventLoop.makeFailedFuture(error)
         }
     }
     
@@ -96,7 +100,7 @@ public struct HttpProtocol: ProtocolInterface {
 }
 
 /// Handler that bridges NIOHTTP1 events to Lotus events
-final class LotusHttpHandler: ChannelInboundHandler {
+final class LotusHttpHandler: ChannelInboundHandler, @unchecked Sendable {
     typealias InboundIn = HTTPServerRequestPart
     typealias OutboundOut = HTTPServerResponsePart
     
@@ -147,7 +151,9 @@ final class LotusHttpHandler: ChannelInboundHandler {
             
             guard let conn = self.connection else { return }
             
-            if let onMessage = worker.onMessage {
+            if let onMessageSync = worker.onMessageSync {
+                onMessageSync(conn, request)
+            } else if let onMessage = worker.onMessage {
                 Task {
                     await onMessage(conn, request)
                 }
@@ -174,8 +180,18 @@ final class LotusHttpHandler: ChannelInboundHandler {
 // Extend Connection to support easier HTTP sending
 extension Connection where P == HttpProtocol {
     public func send(_ response: HttpResponse) async throws {
+        try await writeHTTPResponse(response).get()
+    }
+
+    @discardableResult
+    public func writeHTTPResponse(_ response: HttpResponse, closeAfterFlush: Bool = false) -> EventLoopFuture<Void> {
+        var headers = response.headers
+        if !headers.contains(name: "Content-Length") && !headers.contains(name: "Transfer-Encoding") {
+            headers.add(name: "Content-Length", value: "\(response.body.utf8.count)")
+        }
+
         // Send Head
-        let head = HTTPResponseHead(version: .init(major: 1, minor: 1), status: response.status, headers: response.headers)
+        let head = HTTPResponseHead(version: .init(major: 1, minor: 1), status: response.status, headers: headers)
         channel.write(HTTPServerResponsePart.head(head), promise: nil)
         
         // Send Body
@@ -183,7 +199,13 @@ extension Connection where P == HttpProtocol {
         channel.write(HTTPServerResponsePart.body(.byteBuffer(buffer)), promise: nil)
         
         // Send End
-        try await channel.writeAndFlush(HTTPServerResponsePart.end(nil))
+        let flush = channel.writeAndFlush(HTTPServerResponsePart.end(nil))
+        if closeAfterFlush {
+            return flush.flatMap { [channel] in
+                channel.close()
+            }
+        }
+        return flush
     }
     
     // Helper to send simple string

@@ -7,8 +7,16 @@ public struct TextProtocol: ProtocolInterface {
     public typealias Response = String
     
     public static func input(buffer: inout ByteBuffer) throws -> Int {
+        if buffer.readableBytes > maxPackageSize {
+            throw SwiftLotusError.payloadTooLarge(maximum: maxPackageSize)
+        }
+
         if let newlineIndex = buffer.readableBytesView.firstIndex(of: 10) { // 10 is '\n'
-            return newlineIndex - buffer.readerIndex + 1
+            let packageLength = newlineIndex - buffer.readerIndex + 1
+            if packageLength > maxPackageSize {
+                throw SwiftLotusError.payloadTooLarge(maximum: maxPackageSize)
+            }
+            return packageLength
         }
         return 0
     }
@@ -18,7 +26,14 @@ public struct TextProtocol: ProtocolInterface {
         guard let string = buffer.readString(length: readableBytes) else {
             return ""
         }
-        return string.trimmingCharacters(in: .newlines)
+        var message = string
+        if message.utf8.last == 10 {
+            message.removeLast()
+            if message.utf8.last == 13 {
+                message.removeLast()
+            }
+        }
+        return message
     }
     
     public static func encode(data: String, allocator: ByteBufferAllocator) -> ByteBuffer {

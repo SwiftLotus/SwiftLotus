@@ -21,12 +21,24 @@ public final class Connection<P: ProtocolInterface>: Sendable, Identifiable {
     /// Send data to the client.
     /// - Parameter data: The data to send (type defined by Protocol).
     public func send(_ data: P.Response) async throws {
-        try await channel.writeAndFlush(data)
+        try await writeProtocolResponse(data).get()
+    }
+
+    /// Write data and return the underlying EventLoopFuture for event-loop fast paths.
+    @discardableResult
+    public func writeProtocolResponse(_ data: P.Response) -> EventLoopFuture<Void> {
+        channel.writeAndFlush(data)
     }
     
     /// Close the connection
     public func close() async throws {
-        try await channel.close()
+        try await closeFuture().get()
+    }
+
+    /// Close the connection and return the underlying EventLoopFuture.
+    @discardableResult
+    public func closeFuture() -> EventLoopFuture<Void> {
+        channel.close()
     }
 }
 

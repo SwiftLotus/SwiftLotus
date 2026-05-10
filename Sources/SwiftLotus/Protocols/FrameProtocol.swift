@@ -6,10 +6,6 @@ public struct FrameProtocol: ProtocolInterface {
     public typealias Message = String
     public typealias Response = String
     
-    public enum FrameError: Error {
-        case payloadTooLarge
-    }
-    
     public static func input(buffer: inout ByteBuffer) throws -> Int {
         // We need at least 4 bytes for the header
         if buffer.readableBytes < 4 {
@@ -22,8 +18,8 @@ public struct FrameProtocol: ProtocolInterface {
         }
         
         // Sanity Check
-        if length > 10 * 1024 * 1024 {
-            throw FrameError.payloadTooLarge
+        if length > maxPackageSize {
+            throw SwiftLotusError.payloadTooLarge(maximum: maxPackageSize)
         }
         
         // Total package length = 4 (header) + body length

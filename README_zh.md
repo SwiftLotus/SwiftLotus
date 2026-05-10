@@ -37,17 +37,23 @@ SwiftLotus 提供了一种回归本源的极速事件通讯骨架：
 - **极速按需数据库**: 采用包目标物理隔离式 (Target Isolation) 支持了 `RediStack`、`MySQLNIO`、`PostgresNIO` 级并发。
 - **超高精度物理调度器**: 纯原生依托于 NIO 发动机的物理级别高精度 EventLoop 定时器 (完美避开低效的 `Task.sleep` 携程睡眠消耗)。
 
-## ⚡️ 物理性能压测指标
-采用原生 `SwiftLotus<HttpProtocol>` 作为纯文本的 Ping-Pong 微服务器。在**彻底关闭 Keep-Alive 连接保持机制（强制每一个独立请求都要进行完整的 TCP 三次握手建联、发包、回包再到立即四次挥手断开回收）**的最残酷极端压测环境下，一台普通的家用局域网非优化的本地机器依旧以亚毫秒级的极限延迟跑出了 **> 10,000+ RPS** 的惊人吞吐。如果您是在高防长连接 (`wrk -c`) 的常规网关形态下，吞吐表现将会呈指数级飞跃并直线撞击网卡的物理处理上限天花板！
+## ⚡️ 性能压测指标
+本仓库在 `Benchmarks/HTTP` 中提供了一套本机回归压测，用来比较最小化 `SwiftLotus<HttpProtocol>` 服务器和最小化 raw SwiftNIO HTTP 服务器的同机差距。它适合观察框架层开销，不等同于业界排行。
+
+最新本机数据：
 
 ```text
+压测工具:                        ApacheBench
+压测命令:                        ab -n 200000 -c 100 -k
 并发级别 (Concurrency Level):      100
-总完成请求数 (Complete requests):  20000
+总完成请求数 (Complete requests):  200000
 失败请求数 (Failed requests):      0
-每秒处理请求 (Requests per second): 10496.17 [#/sec] (平均)
-单服务器请求消耗 (Time per request): 0.095 [ms] (平均并发分布)
+
+SwiftLotus HTTP:                 80707.74 requests/sec
+Raw SwiftNIO HTTP:               82151.65 requests/sec
 ```
-*(上述数据使用 Apache Bench 通过 `ab -c 100 -n 20000` 在本机实测得出)*
+
+如果要做正式横向对比，建议使用 TechEmpower Framework Benchmarks。TFB 对响应头、HTTP pipelining、`wrk`、高并发等级和硬件环境都有更严格的统一要求；本仓库的 benchmark 则刻意保持轻量，方便开发阶段快速回归。
 
 ## 🛠 开发环境要求
 
@@ -64,17 +70,26 @@ dependencies: [
 ]
 ```
 
-### 生态微模块按需自选装载 (Target Splitting)
-为了保持您工程依赖库的极致精简，所有重型的三方数据库驱动均采用严格的按需挂载方案。按您自己所需的实际组件进行挂载组装：
+### 生态微模块按需自选装载
+根包现在只包含核心网络引擎：安装 `SwiftLotus` 不会解析 Redis、MySQL 或 Postgres 驱动。数据库适配器放在本仓库的 `Addons/` 独立包中，既可以在本地开发时用 path 引入，也可以将来拆成独立仓库发布：
+
 ```swift
+dependencies: [
+    .package(url: "https://github.com/SwiftLotus/SwiftLotus.git", from: "1.0.0"),
+
+    // 在本仓库内本地开发：
+    // .package(path: "Addons/SwiftLotusRedis")
+
+    // 独立发布后可使用各自仓库 URL：
+    // .package(url: "https://github.com/SwiftLotus/SwiftLotusRedis.git", from: "1.0.0"),
+]
+
 targets: [
     .target(
         name: "YourApp",
         dependencies: [
-            .product(name: "SwiftLotus", package: "SwiftLotus"),          // 【必选】核心网络发动机引擎 (无任何无关杂项)
-            .product(name: "SwiftLotusRedis", package: "SwiftLotus"),     // Redis 高频集成
-            .product(name: "SwiftLotusMySQL", package: "SwiftLotus"),     // MySQL 原生连接器
-            // .product(name: "SwiftLotusPostgres", package: "SwiftLotus") // Postgres 连接器
+            .product(name: "SwiftLotus", package: "SwiftLotus"),
+            // .product(name: "SwiftLotusRedis", package: "SwiftLotusRedis"),
         ]
     )
 ]
@@ -102,7 +117,7 @@ struct App {
         // 核心事件：数据吞吐
         worker.onMessage = { connection, message in
             // API：极速取出全服在线字典 `connections.values` 瞬间进行数据面全图广播分发
-            worker.connections.values.forEach { sibling in 
+            for sibling in worker.connections.values {
                 try? await sibling.send("玩家 \(connection.id) 说: \(message)")
             }
         }
@@ -127,6 +142,17 @@ worker.onMessage = { connection, frame in
 }
 
 try await worker.run()
+```
+
+### EventLoop 极速路径
+普通业务逻辑继续使用 `onMessage`。如果是极短的热点处理器，例如只组装并刷出一个 HTTP 响应，可以使用 `onMessageSync`，它会直接在 channel 所在的 EventLoop 上执行，避免每条消息额外创建一个 Swift task。这个回调里不要做阻塞计算或阻塞 IO。
+
+```swift
+let worker = SwiftLotus<HttpProtocol>(name: "API", uri: "http://0.0.0.0:8080")
+
+worker.onMessageSync = { connection, request in
+    connection.writeHTTPResponse(HttpResponse(body: "OK"))
+}
 ```
 
 ### 3. C 语言系统级原生的零挂载等待数据库联动 (例: Redis)

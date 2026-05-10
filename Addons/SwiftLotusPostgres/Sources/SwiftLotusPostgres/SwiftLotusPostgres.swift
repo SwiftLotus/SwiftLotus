@@ -6,8 +6,11 @@ import Logging
 public enum SwiftLotusPostgres {
     public static func connect(hostname: String = "127.0.0.1", port: Int = 5432, username: String, password: String?, database: String) async throws -> PostgresConnection {
         let config = PostgresConnection.Configuration(
-            connection: .init(host: hostname, port: port),
-            authentication: .init(username: username, database: database, password: password),
+            host: hostname,
+            port: port,
+            username: username,
+            password: password,
+            database: database,
             tls: .disable
         )
         return try await PostgresConnection.connect(

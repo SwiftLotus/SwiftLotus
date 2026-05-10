@@ -1,8 +1,8 @@
-import NIOCore
-import NIOPosix
-import NIOSSL
+@preconcurrency import NIOCore
+@preconcurrency import NIOPosix
+@preconcurrency import NIOSSL
 import Foundation
-import NIOConcurrencyHelpers
+@preconcurrency import NIOConcurrencyHelpers
 
 /// A globally shared EventLoopGroup to prevent thread leaks in AsyncTcpConnection
 public enum GlobalEventLoop {
@@ -51,6 +51,7 @@ public final class AsyncTcpConnection<P: ProtocolInterface>: @unchecked Sendable
     private var port: Int = 0
     private var scheme: String = "tcp"
     private var sslContext: NIOSSLContext?
+    private var configurationError: SwiftLotusError?
     
     public init(uri: String, sslContext: NIOSSLContext? = nil) {
         self.uri = uri
@@ -63,7 +64,7 @@ public final class AsyncTcpConnection<P: ProtocolInterface>: @unchecked Sendable
         guard let url = URL(string: uri),
               let h = url.host,
               let p = url.port else {
-            print("Invalid URI: \(uri)")
+            configurationError = .invalidURI(uri)
             return
         }
         self.host = h
@@ -84,12 +85,14 @@ public final class AsyncTcpConnection<P: ProtocolInterface>: @unchecked Sendable
     }
     
     private func _connect() async throws {
+        try validateConfiguration()
+
         let bootstrap = ClientBootstrap(group: group)
             .channelOption(ChannelOptions.socketOption(.so_keepalive), value: 1)
             .channelInitializer { channel in
                 return channel.eventLoop.makeSucceededFuture(()).flatMap {
                     var handlers: [ChannelHandler] = []
-                    
+
                     if self.scheme == "ssl" || self.scheme == "wss" || self.sslContext != nil {
                         if let context = self.sslContext {
                             do {
@@ -100,12 +103,17 @@ public final class AsyncTcpConnection<P: ProtocolInterface>: @unchecked Sendable
                             }
                         }
                     }
-                    
+
                     handlers.append(ByteToMessageHandler(LotusDecoder<P>()))
                     handlers.append(MessageToByteHandler(LotusEncoder<P>()))
                     handlers.append(LotusClientHandler(connection: self))
-                    
-                    return channel.pipeline.addHandlers(handlers)
+
+                    do {
+                        try channel.pipeline.syncOperations.addHandlers(handlers)
+                        return channel.eventLoop.makeSucceededFuture(())
+                    } catch {
+                        return channel.eventLoop.makeFailedFuture(error)
+                    }
                 }
             }
         
@@ -114,9 +122,28 @@ public final class AsyncTcpConnection<P: ProtocolInterface>: @unchecked Sendable
         // Wait for close
         try await channel.closeFuture.get()
     }
+
+    private func validateConfiguration() throws {
+        if let configurationError {
+            throw configurationError
+        }
+
+        if requiresTLS && sslContext == nil {
+            throw SwiftLotusError.tlsContextRequired(scheme: scheme)
+        }
+    }
+
+    private var requiresTLS: Bool {
+        switch scheme.lowercased() {
+        case "ssl", "tls", "https", "wss":
+            return true
+        default:
+            return false
+        }
+    }
 }
 
-final class LotusClientHandler<P: ProtocolInterface>: ChannelInboundHandler {
+final class LotusClientHandler<P: ProtocolInterface>: ChannelInboundHandler, @unchecked Sendable {
     typealias InboundIn = P.Message // We assume symmetric protocol for now
     
     let client: AsyncTcpConnection<P>

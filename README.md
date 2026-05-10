@@ -38,16 +38,22 @@ SwiftLotus provides a lightweight, elegant, and bare-metal approach to backend n
 - **High-Precision Timers**: Native NIO-backed event-loop timers (bypassing unstructured `Task.sleep` overhead).
 
 ## ⚡️ Performance Benchmark
-Running a generic HTTP Ping-Pong using `SwiftLotus<HttpProtocol>` **without Keep-Alive** (forcing full raw TCP handshakes per individual request) on a standard development machine yields massive throughput at **> 10,000+ RPS**, with sub-millisecond response guarantees. With persistent connections (`wrk -c`), throughput scales exponentially to physical NIC limits.
+The local benchmark suite under `Benchmarks/HTTP` compares a minimal `SwiftLotus<HttpProtocol>` server with a minimal raw SwiftNIO HTTP server on the same machine. This is a regression benchmark for framework overhead, not an industry ranking.
+
+Latest local run:
 
 ```text
+Tool:                   ApacheBench
+Command:                ab -n 200000 -c 100 -k
 Concurrency Level:      100
-Complete requests:      20000
+Complete requests:      200000
 Failed requests:        0
-Requests per second:    10496.17 [#/sec] (mean)
-Time per request:       0.095 [ms] (mean, across all concurrent requests)
+
+SwiftLotus HTTP:        80707.74 requests/sec
+Raw SwiftNIO HTTP:      82151.65 requests/sec
 ```
-*Tested via Apache Bench (`ab -c 100 -n 20000`)*
+
+For formal cross-framework comparisons, use TechEmpower Framework Benchmarks. TFB uses stricter response requirements, HTTP pipelining, `wrk`, high concurrency levels, and controlled hardware. SwiftLotus' local benchmark is intentionally smaller and easier to run during development.
 
 ## 🛠 Environment Setup
 
@@ -64,17 +70,26 @@ dependencies: [
 ]
 ```
 
-### On-Demand Modules (Target Splitting)
-To keep your dependency tree clean, databases are strictly opt-in. Select only what you use:
+### On-Demand Modules
+The root package is intentionally core-only: installing `SwiftLotus` does not resolve Redis, MySQL, or Postgres drivers. Database adapters live as separate packages under `Addons/` in this repository, so they can be published independently or used locally during development:
+
 ```swift
+dependencies: [
+    .package(url: "https://github.com/SwiftLotus/SwiftLotus.git", from: "1.0.0"),
+
+    // Local development in this repository:
+    // .package(path: "Addons/SwiftLotusRedis")
+
+    // Published add-on packages can use their own repository URLs:
+    // .package(url: "https://github.com/SwiftLotus/SwiftLotusRedis.git", from: "1.0.0"),
+]
+
 targets: [
     .target(
         name: "YourApp",
         dependencies: [
-            .product(name: "SwiftLotus", package: "SwiftLotus"),          // The core engine
-            .product(name: "SwiftLotusRedis", package: "SwiftLotus"),     // Opt-in Redis
-            .product(name: "SwiftLotusMySQL", package: "SwiftLotus"),     // Opt-in MySQL
-            // .product(name: "SwiftLotusPostgres", package: "SwiftLotus") // Opt-in Postgres
+            .product(name: "SwiftLotus", package: "SwiftLotus"),
+            // .product(name: "SwiftLotusRedis", package: "SwiftLotusRedis"),
         ]
     )
 ]
@@ -100,7 +115,7 @@ struct App {
         
         worker.onMessage = { connection, message in
             // Broadcast to all connected users instantly
-            worker.connections.values.forEach { sibling in 
+            for sibling in worker.connections.values {
                 try? await sibling.send("User \(connection.id) says: \(message)")
             }
         }
@@ -124,6 +139,17 @@ worker.onMessage = { connection, frame in
 }
 
 try await worker.run()
+```
+
+### Event-Loop Fast Path
+Use `onMessage` for normal async application logic. For tiny hot-path handlers that only frame and flush a response, `onMessageSync` avoids creating a Swift task per message and runs directly on the channel event loop. Keep this callback non-blocking.
+
+```swift
+let worker = SwiftLotus<HttpProtocol>(name: "API", uri: "http://0.0.0.0:8080")
+
+worker.onMessageSync = { connection, request in
+    connection.writeHTTPResponse(HttpResponse(body: "OK"))
+}
 ```
 
 ### 3. Native Database Connectivity (Redis Example)

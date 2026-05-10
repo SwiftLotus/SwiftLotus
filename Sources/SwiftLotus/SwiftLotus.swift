@@ -1,10 +1,10 @@
-import NIOCore
-import NIOPosix
-import NIOSSL
+@preconcurrency import NIOCore
+@preconcurrency import NIOPosix
+@preconcurrency import NIOSSL
 import Logging
 import Foundation
 import Dispatch
-import NIOConcurrencyHelpers
+@preconcurrency import NIOConcurrencyHelpers
 
 /// The main worker class that manages the server and connection lifecycle.
 /// Renamed from Lotus to SwiftLotus.
@@ -18,6 +18,7 @@ public final class SwiftLotus<P: ProtocolInterface>: @unchecked Sendable {
     
     /// SSL Context for enabling TLS/SSL
     public var sslContext: NIOSSLContext?
+    public var enableSignalHandlers: Bool
     
     // MARK: - Callbacks
     
@@ -33,6 +34,13 @@ public final class SwiftLotus<P: ProtocolInterface>: @unchecked Sendable {
     public var onMessage: (@Sendable (Connection<P>, P.Message) async -> Void)? {
         get { lock.withLock { _onMessage } }
         set { lock.withLock { _onMessage = newValue } }
+    }
+
+    private var _onMessageSync: (@Sendable (Connection<P>, P.Message) -> Void)?
+    /// Synchronous fast path executed on the channel event loop. Keep this callback non-blocking.
+    public var onMessageSync: (@Sendable (Connection<P>, P.Message) -> Void)? {
+        get { lock.withLock { _onMessageSync } }
+        set { lock.withLock { _onMessageSync = newValue } }
     }
     
     private var _onClose: (@Sendable (Connection<P>) async -> Void)?
@@ -66,13 +74,18 @@ public final class SwiftLotus<P: ProtocolInterface>: @unchecked Sendable {
     private var port: Int = 0
     private var scheme: String = "tcp"
     private var signalSources: [DispatchSourceSignal] = []
+    private var configurationError: SwiftLotusError?
+    private let lifecycleLock = NIOLock()
+    private var serverChannel: Channel?
+    private var didShutdownGroup = false
     
     // MARK: - Initialization
     
-    public init(name: String = "SwiftLotus", count: Int = System.coreCount, uri: String) {
+    public init(name: String = "SwiftLotus", count: Int = System.coreCount, uri: String, enableSignalHandlers: Bool = true) {
         self.name = name
         self.count = count
         self.uri = uri
+        self.enableSignalHandlers = enableSignalHandlers
         self.group = MultiThreadedEventLoopGroup(numberOfThreads: count)
         parseUri(uri)
     }
@@ -81,7 +94,7 @@ public final class SwiftLotus<P: ProtocolInterface>: @unchecked Sendable {
         guard let url = URL(string: uri),
               let h = url.host,
               let p = url.port else {
-            logger.error("Invalid URI format: \(uri)")
+            configurationError = .invalidURI(uri)
             return
         }
         self.host = h
@@ -92,7 +105,16 @@ public final class SwiftLotus<P: ProtocolInterface>: @unchecked Sendable {
     // MARK: - Runtime
     
     public func run() async throws {
-        setupSignalHandler()
+        do {
+            try validateConfiguration()
+        } catch {
+            try? await shutdownGroupOnce()
+            throw error
+        }
+
+        if enableSignalHandlers {
+            setupSignalHandler()
+        }
         
         let bootstrap = ServerBootstrap(group: group)
             .serverChannelOption(ChannelOptions.backlog, value: 256)
@@ -100,8 +122,14 @@ public final class SwiftLotus<P: ProtocolInterface>: @unchecked Sendable {
             .childChannelInitializer { channel in
                 // Add SSL Handler if context exists
                 if let context = self.sslContext {
-                    let sslHandler = NIOSSLServerHandler(context: context)
-                    return channel.pipeline.addHandler(sslHandler).flatMap {
+                    do {
+                        let sslHandler = NIOSSLServerHandler(context: context)
+                        try channel.pipeline.syncOperations.addHandler(sslHandler)
+                    } catch {
+                        return channel.eventLoop.makeFailedFuture(error)
+                    }
+
+                    return channel.eventLoop.makeSucceededFuture(()).flatMap {
                         P.addHandlers(pipeline: channel.pipeline, worker: self)
                     }
                 }
@@ -111,11 +139,61 @@ public final class SwiftLotus<P: ProtocolInterface>: @unchecked Sendable {
             }
             .childChannelOption(ChannelOptions.socketOption(.so_keepalive), value: 1)
         
-        let channel = try await bootstrap.bind(host: host, port: port).get()
-        print("SwiftLotus [\(name)] started listening on \(uri)")
-        
-        // Wait until the channel closes
-        try await channel.closeFuture.get()
+        do {
+            let channel = try await bootstrap.bind(host: host, port: port).get()
+            lifecycleLock.withLock {
+                serverChannel = channel
+            }
+            print("SwiftLotus [\(name)] started listening on \(uri)")
+
+            // Wait until the channel closes
+            try await channel.closeFuture.get()
+            try await shutdownGroupOnce()
+        } catch {
+            try? await shutdownGroupOnce()
+            throw error
+        }
+    }
+
+    public func stop() async throws {
+        let channel = lifecycleLock.withLock { serverChannel }
+        if let channel {
+            try await channel.close().get()
+        }
+        try await shutdownGroupOnce()
+    }
+
+    private func validateConfiguration() throws {
+        if let configurationError {
+            throw configurationError
+        }
+
+        if requiresTLS && sslContext == nil {
+            throw SwiftLotusError.tlsContextRequired(scheme: scheme)
+        }
+    }
+
+    private var requiresTLS: Bool {
+        switch scheme.lowercased() {
+        case "ssl", "tls", "https", "wss":
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func shutdownGroupOnce() async throws {
+        let shouldShutdown = lifecycleLock.withLock {
+            if didShutdownGroup {
+                return false
+            }
+            didShutdownGroup = true
+            return true
+        }
+
+        if shouldShutdown {
+            try await group.shutdownGracefully()
+        }
     }
     
     private func setupSignalHandler() {
@@ -126,7 +204,7 @@ public final class SwiftLotus<P: ProtocolInterface>: @unchecked Sendable {
                 print("\nReceived signal, shutting down...")
                 Task {
                     do {
-                        try await self.group.shutdownGracefully()
+                        try await self.stop()
                         exit(0)
                     } catch {
                         print("Error shutting down: \(error)")
@@ -162,6 +240,9 @@ final class LotusDecoder<P: ProtocolInterface>: ByteToMessageDecoder {
         if pkgLen == 0 { return .needMoreData }
         
         if pkgLen > 0 {
+            if pkgLen > P.maxPackageSize {
+                throw SwiftLotusError.payloadTooLarge(maximum: P.maxPackageSize)
+            }
             guard var pkgBuffer = buffer.readSlice(length: pkgLen) else { return .needMoreData }
             let message = P.decode(buffer: &pkgBuffer)
             context.fireChannelRead(self.wrapInboundOut(message))
@@ -181,7 +262,7 @@ final class LotusEncoder<P: ProtocolInterface>: MessageToByteEncoder {
     }
 }
 
-final class LotusHandler<P: ProtocolInterface>: ChannelInboundHandler {
+final class LotusHandler<P: ProtocolInterface>: ChannelInboundHandler, @unchecked Sendable {
     typealias InboundIn = P.Message
     typealias OutboundOut = P.Response
     
@@ -206,7 +287,9 @@ final class LotusHandler<P: ProtocolInterface>: ChannelInboundHandler {
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
         let message = self.unwrapInboundIn(data)
         guard let conn = self.connection else { return }
-        if let onMessage = worker.onMessage {
+        if let onMessageSync = worker.onMessageSync {
+            onMessageSync(conn, message)
+        } else if let onMessage = worker.onMessage {
             Task { await onMessage(conn, message) }
         }
     }
