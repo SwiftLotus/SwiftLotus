@@ -40,6 +40,30 @@ final class ConnectionRuntimeTests: XCTestCase {
         XCTAssertNoThrow(try channel.finish(acceptAlreadyClosed: true))
     }
 
+    func testWorkerMetricsTrackConnectionsMessagesAndBackpressure() throws {
+        let worker = SwiftLotus<TextProtocol>(name: "MetricsTest", uri: "tcp://127.0.0.1:0", enableSignalHandlers: false)
+        let channel = EmbeddedChannel(handler: LotusHandler(worker: worker))
+        channel.pipeline.fireChannelActive()
+
+        let connection = try XCTUnwrap(worker.connections.values.first)
+        try channel.writeInbound("hello")
+        try connection.writeProtocolResponse("world").wait()
+        channel.pipeline.fireChannelWritabilityChanged()
+        channel.pipeline.fireErrorCaught(ChannelError.alreadyClosed)
+        channel.pipeline.fireChannelInactive()
+
+        let snapshot = worker.metrics.snapshot()
+        XCTAssertEqual(snapshot.counters["connections.accepted"], 1)
+        XCTAssertEqual(snapshot.counters["connections.closed"], 1)
+        XCTAssertEqual(snapshot.counters["messages.received"], 1)
+        XCTAssertEqual(snapshot.counters["messages.sent"], 1)
+        XCTAssertEqual(snapshot.counters["backpressure.drain"], 1)
+        XCTAssertEqual(snapshot.counters["errors"], 1)
+        XCTAssertEqual(snapshot.gauges["connections.current"], 0)
+
+        XCTAssertNoThrow(try channel.finish(acceptAlreadyClosed: true))
+    }
+
     func testIdleEventInvokesCallbackAndClosesConnectionWhenConfigured() {
         let worker = SwiftLotus<TextProtocol>(name: "IdleTest", uri: "tcp://127.0.0.1:0", enableSignalHandlers: false)
         worker.closeIdleConnections = true

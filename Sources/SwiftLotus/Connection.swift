@@ -9,6 +9,7 @@ public final class Connection<P: ProtocolInterface>: @unchecked Sendable, Identi
     
     public let id: UUID
     let channel: Channel
+    let metrics: SwiftLotusMetrics?
     private let stateLock = NIOLock()
     private var _isReadPaused = false
     private var _isAuthenticated = false
@@ -37,9 +38,10 @@ public final class Connection<P: ProtocolInterface>: @unchecked Sendable, Identi
         stateLock.withLock { _isAuthenticated }
     }
     
-    init(channel: Channel) {
+    init(channel: Channel, metrics: SwiftLotusMetrics? = nil) {
         self.id = UUID()
         self.channel = channel
+        self.metrics = metrics
     }
     
     /// Send data to the client.
@@ -51,7 +53,11 @@ public final class Connection<P: ProtocolInterface>: @unchecked Sendable, Identi
     /// Write data and return the underlying EventLoopFuture for event-loop fast paths.
     @discardableResult
     public func writeProtocolResponse(_ data: P.Response) -> EventLoopFuture<Void> {
-        channel.writeAndFlush(data)
+        let future = channel.writeAndFlush(data)
+        future.whenSuccess { [metrics] in
+            metrics?.incrementCounter("messages.sent")
+        }
+        return future
     }
     
     /// Close the connection

@@ -122,6 +122,9 @@ public final class SwiftLotus<P: ProtocolInterface>: @unchecked Sendable {
 
     /// User/group oriented connection registry for long-lived services.
     public let registry = ConnectionRegistry<P>()
+
+    /// Process-local counters, gauges, and duration summaries for observability.
+    public let metrics = SwiftLotusMetrics()
     
     /// Global array of active connections to this worker
     public var connections: [UUID: Connection<P>] {
@@ -139,6 +142,8 @@ public final class SwiftLotus<P: ProtocolInterface>: @unchecked Sendable {
             return _connections.removeValue(forKey: conn.id)
         }
         registry.remove(conn)
+        metrics.incrementCounter("connections.closed")
+        metrics.setGauge("connections.current", value: Double(registry.connectionCount))
     }
     
     private let group: MultiThreadedEventLoopGroup
@@ -408,6 +413,8 @@ public final class SwiftLotus<P: ProtocolInterface>: @unchecked Sendable {
         switch decision {
         case .accepted:
             _addConnection(conn)
+            metrics.incrementCounter("connections.accepted")
+            metrics.setGauge("connections.current", value: Double(registry.connectionCount))
             scheduleAuthenticationTimeoutIfNeeded(conn)
             writeRuntimeStatus()
             return true
@@ -470,10 +477,12 @@ public final class SwiftLotus<P: ProtocolInterface>: @unchecked Sendable {
 
     internal func _handleWritabilityChanged(_ connection: Connection<P>) {
         if connection.isWritable {
+            metrics.incrementCounter("backpressure.drain")
             if let onBufferDrain {
                 Task { await onBufferDrain(connection) }
             }
         } else if let onBufferFull {
+            metrics.incrementCounter("backpressure.full")
             Task { await onBufferFull(connection) }
         }
     }
@@ -495,6 +504,7 @@ public final class SwiftLotus<P: ProtocolInterface>: @unchecked Sendable {
     }
 
     internal func _handleError(_ error: Error, connection: Connection<P>?) {
+        metrics.incrementCounter("errors")
         if let onError {
             Task { await onError(connection, error) }
         }
@@ -524,6 +534,12 @@ public final class SwiftLotus<P: ProtocolInterface>: @unchecked Sendable {
 final class LotusDecoder<P: ProtocolInterface>: ByteToMessageDecoder {
     typealias InboundIn = ByteBuffer
     typealias InboundOut = P.Message
+
+    private let metrics: SwiftLotusMetrics?
+
+    init(metrics: SwiftLotusMetrics? = nil) {
+        self.metrics = metrics
+    }
     
     func decode(context: ChannelHandlerContext, buffer: inout ByteBuffer) throws -> DecodingState {
         let pkgLen = try P.input(buffer: &buffer)
@@ -535,6 +551,7 @@ final class LotusDecoder<P: ProtocolInterface>: ByteToMessageDecoder {
             }
             guard var pkgBuffer = buffer.readSlice(length: pkgLen) else { return .needMoreData }
             let message = P.decode(buffer: &pkgBuffer)
+            metrics?.incrementCounter("bytes.received", by: Int64(pkgLen))
             context.fireChannelRead(self.wrapInboundOut(message))
             return .continue
         }
@@ -564,7 +581,7 @@ final class LotusHandler<P: ProtocolInterface>: ChannelInboundHandler, @unchecke
     }
     
     func channelActive(context: ChannelHandlerContext) {
-        let conn = Connection<P>(channel: context.channel)
+        let conn = Connection<P>(channel: context.channel, metrics: worker.metrics)
         self.connection = conn
         guard worker._registerConnection(conn, context: context) else { return }
         
@@ -576,6 +593,7 @@ final class LotusHandler<P: ProtocolInterface>: ChannelInboundHandler, @unchecke
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
         let message = self.unwrapInboundIn(data)
         guard let conn = self.connection else { return }
+        worker.metrics.incrementCounter("messages.received")
         if let onMessageSync = worker.onMessageSync {
             onMessageSync(conn, message)
         } else if let onMessage = worker.onMessage {

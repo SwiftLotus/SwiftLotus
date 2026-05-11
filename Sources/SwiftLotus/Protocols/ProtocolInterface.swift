@@ -36,7 +36,7 @@ public extension ProtocolInterface {
     static func addHandlers(pipeline: ChannelPipeline, worker: SwiftLotus<Self>) -> EventLoopFuture<Void> {
         do {
             try pipeline.syncOperations.addHandlers([
-                ByteToMessageHandler(LotusDecoder<Self>()),
+                ByteToMessageHandler(LotusDecoder<Self>(metrics: worker.metrics)),
                 MessageToByteHandler(LotusEncoder<Self>()),
                 LotusHandler(worker: worker)
             ])

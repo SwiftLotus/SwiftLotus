@@ -11,12 +11,18 @@ struct SwiftLotusCLI {
         case .start(let spec):
             let state = try manager.start(spec)
             print("Started \(state.records.count) worker(s)")
+        case .supervise(let spec):
+            print("Supervising \(spec.workerCount) worker(s)")
+            _ = try manager.supervise(spec)
         case .stop(let runtimeDirectory):
             try manager.stop(runtimeDirectory: runtimeDirectory)
             print("Stopped workers")
         case .restart(let spec):
             let state = try manager.restart(spec)
             print("Restarted \(state.records.count) worker(s)")
+        case .rollingReload(let spec):
+            let state = try manager.rollingReload(spec)
+            print("Rolling reloaded \(state.records.count) worker(s)")
         case .reload(let runtimeDirectory):
             try manager.reload(runtimeDirectory: runtimeDirectory)
             print("Reload signal sent")

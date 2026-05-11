@@ -117,7 +117,7 @@ final class LotusHttpHandler: ChannelInboundHandler, @unchecked Sendable {
     }
     
     func channelActive(context: ChannelHandlerContext) {
-        let conn = Connection<HttpProtocol>(channel: context.channel)
+        let conn = Connection<HttpProtocol>(channel: context.channel, metrics: worker.metrics)
         self.connection = conn
         guard worker._registerConnection(conn, context: context) else { return }
         
@@ -149,6 +149,8 @@ final class LotusHttpHandler: ChannelInboundHandler, @unchecked Sendable {
             let request = HttpRequest(head: head, body: requestBody)
             
             guard let conn = self.connection else { return }
+            worker.metrics.incrementCounter("messages.received")
+            worker.metrics.incrementCounter("bytes.received", by: Int64(bodySize))
             
             if let onMessageSync = worker.onMessageSync {
                 onMessageSync(conn, request)
@@ -220,6 +222,8 @@ extension Connection where P == HttpProtocol {
         
         // Send End
         let flush = channel.writeAndFlush(HTTPServerResponsePart.end(nil))
+        metrics?.incrementCounter("messages.sent")
+        metrics?.incrementCounter("bytes.sent", by: Int64(response.body.utf8.count))
         if closeAfterFlush {
             return flush.flatMap { [channel] in
                 channel.close()

@@ -38,8 +38,10 @@ public struct WorkerProcessSpec: Equatable, Sendable {
 
 public enum SwiftLotusCLICommand: Equatable, Sendable {
     case start(WorkerProcessSpec)
+    case supervise(WorkerProcessSpec)
     case stop(runtimeDirectory: URL)
     case restart(WorkerProcessSpec)
+    case rollingReload(WorkerProcessSpec)
     case reload(runtimeDirectory: URL)
     case status(runtimeDirectory: URL)
     case connections(runtimeDirectory: URL)
@@ -53,8 +55,12 @@ public enum SwiftLotusCLICommand: Equatable, Sendable {
         switch command {
         case "start":
             return .start(try parser.processSpec())
+        case "supervise":
+            return .supervise(try parser.processSpec())
         case "restart":
             return .restart(try parser.processSpec())
+        case "rolling-reload":
+            return .rollingReload(try parser.processSpec())
         case "stop":
             return .stop(runtimeDirectory: parser.runtimeDirectory())
         case "reload":

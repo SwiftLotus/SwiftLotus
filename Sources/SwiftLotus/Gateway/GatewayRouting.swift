@@ -47,6 +47,7 @@ public final class GatewayRouteTable: @unchecked Sendable {
     private var routesByUid: [String: Set<GatewayRoute>] = [:]
     private var routesByGroup: [String: Set<GatewayRoute>] = [:]
     private var routesByNode: [String: Set<GatewayRoute>] = [:]
+    private var routesByConnectionId: [String: Set<GatewayRoute>] = [:]
 
     public init() {}
 
@@ -60,6 +61,12 @@ public final class GatewayRouteTable: @unchecked Sendable {
         lock.withLock {
             nodesById.removeValue(forKey: nodeId)
             routesByNode.removeValue(forKey: nodeId)
+            for connectionId in Array(routesByConnectionId.keys) {
+                routesByConnectionId[connectionId] = routesByConnectionId[connectionId]?.filter { $0.nodeId != nodeId }
+                if routesByConnectionId[connectionId]?.isEmpty == true {
+                    routesByConnectionId.removeValue(forKey: connectionId)
+                }
+            }
 
             for uid in Array(routesByUid.keys) {
                 routesByUid[uid] = routesByUid[uid]?.filter { $0.nodeId != nodeId }
@@ -81,11 +88,18 @@ public final class GatewayRouteTable: @unchecked Sendable {
         lock.withLock { nodesById[id] }
     }
 
+    public var nodes: [GatewayNode] {
+        lock.withLock {
+            nodesById.values.sorted { $0.id < $1.id }
+        }
+    }
+
     public func bind(connectionId: String, uid: String, nodeId: String) {
         let route = GatewayRoute(connectionId: connectionId, nodeId: nodeId)
         lock.withLock {
             routesByUid[uid, default: []].insert(route)
             routesByNode[nodeId, default: []].insert(route)
+            routesByConnectionId[connectionId, default: []].insert(route)
         }
     }
 
@@ -94,6 +108,10 @@ public final class GatewayRouteTable: @unchecked Sendable {
             guard let routes = routesByUid[uid] else { return }
             for route in routes where route.connectionId == connectionId {
                 routesByUid[uid]?.remove(route)
+                removeConnectionRouteIfUnreferenced(route)
+            }
+            if routesByUid[uid]?.isEmpty == true {
+                routesByUid.removeValue(forKey: uid)
             }
         }
     }
@@ -103,6 +121,7 @@ public final class GatewayRouteTable: @unchecked Sendable {
         lock.withLock {
             routesByGroup[group, default: []].insert(route)
             routesByNode[nodeId, default: []].insert(route)
+            routesByConnectionId[connectionId, default: []].insert(route)
         }
     }
 
@@ -111,6 +130,10 @@ public final class GatewayRouteTable: @unchecked Sendable {
             guard let routes = routesByGroup[group] else { return }
             for route in routes where route.connectionId == connectionId {
                 routesByGroup[group]?.remove(route)
+                removeConnectionRouteIfUnreferenced(route)
+            }
+            if routesByGroup[group]?.isEmpty == true {
+                routesByGroup.removeValue(forKey: group)
             }
         }
     }
@@ -124,6 +147,12 @@ public final class GatewayRouteTable: @unchecked Sendable {
     public func routes(inGroup group: String) -> [GatewayRoute] {
         lock.withLock {
             (routesByGroup[group] ?? []).sorted { $0.connectionId < $1.connectionId }
+        }
+    }
+
+    public func routes(forConnection connectionId: String) -> [GatewayRoute] {
+        lock.withLock {
+            (routesByConnectionId[connectionId] ?? []).sorted { $0.nodeId < $1.nodeId }
         }
     }
 
@@ -143,6 +172,20 @@ public final class GatewayRouteTable: @unchecked Sendable {
             leave(connectionId: connectionId, group: group)
         case .heartbeat:
             break
+        }
+    }
+
+    private func removeConnectionRouteIfUnreferenced(_ route: GatewayRoute) {
+        let stillReferencedByUid = routesByUid.values.contains { $0.contains(route) }
+        let stillReferencedByGroup = routesByGroup.values.contains { $0.contains(route) }
+        guard !stillReferencedByUid && !stillReferencedByGroup else { return }
+        routesByConnectionId[route.connectionId]?.remove(route)
+        if routesByConnectionId[route.connectionId]?.isEmpty == true {
+            routesByConnectionId.removeValue(forKey: route.connectionId)
+        }
+        routesByNode[route.nodeId]?.remove(route)
+        if routesByNode[route.nodeId]?.isEmpty == true {
+            routesByNode.removeValue(forKey: route.nodeId)
         }
     }
 }

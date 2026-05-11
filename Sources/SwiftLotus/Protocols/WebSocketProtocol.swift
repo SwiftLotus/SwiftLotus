@@ -80,7 +80,7 @@ final class LotusWebSocketHandler: ChannelInboundHandler, @unchecked Sendable {
     }
     
     func handlerAdded(context: ChannelHandlerContext) {
-        let conn = Connection<WebSocketProtocol>(channel: context.channel)
+        let conn = Connection<WebSocketProtocol>(channel: context.channel, metrics: worker.metrics)
         self.connection = conn
         guard worker._registerConnection(conn, context: context) else { return }
         
@@ -136,6 +136,8 @@ final class LotusWebSocketHandler: ChannelInboundHandler, @unchecked Sendable {
     private func fireMessage(_ opcode: WebSocketOpcode, data: ByteBuffer) {
         let wrapper = WebSocketFrameWrapper(opcode: opcode, data: data, fin: true)
         guard let conn = self.connection else { return }
+        worker.metrics.incrementCounter("messages.received")
+        worker.metrics.incrementCounter("bytes.received", by: Int64(data.readableBytes))
         if let onMessageSync = worker.onMessageSync {
             onMessageSync(conn, wrapper)
         } else if let onMessage = worker.onMessage {
@@ -202,7 +204,12 @@ extension Connection where P == WebSocketProtocol {
     public func writeWebSocketText(_ text: String) -> EventLoopFuture<Void> {
         let buffer = channel.allocator.buffer(string: text)
         let frame = WebSocketFrame(fin: true, opcode: .text, data: buffer)
-        return channel.writeAndFlush(frame)
+        let future = channel.writeAndFlush(frame)
+        future.whenSuccess { [metrics] in
+            metrics?.incrementCounter("messages.sent")
+            metrics?.incrementCounter("bytes.sent", by: Int64(text.utf8.count))
+        }
+        return future
     }
     
     public func send(_ response: WebSocketFrameWrapper) async throws {
@@ -212,6 +219,11 @@ extension Connection where P == WebSocketProtocol {
     @discardableResult
     public func writeWebSocketResponse(_ response: WebSocketFrameWrapper) -> EventLoopFuture<Void> {
         let frame = WebSocketFrame(fin: response.fin, opcode: response.opcode, data: response.data)
-        return channel.writeAndFlush(frame)
+        let future = channel.writeAndFlush(frame)
+        future.whenSuccess { [metrics] in
+            metrics?.incrementCounter("messages.sent")
+            metrics?.incrementCounter("bytes.sent", by: Int64(response.data.readableBytes))
+        }
+        return future
     }
 }
