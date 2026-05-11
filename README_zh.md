@@ -17,21 +17,22 @@
     </a>
 </p>
 
-**SwiftLotus** 是一个基于 SwiftNIO 的轻量级异步网络服务框架。它不仅可以处理 HTTP 和 WebSocket，也可以作为自定义 TCP 协议、长连接服务、代理服务、游戏网关、IoT 网关等场景的底层网络引擎。
+**SwiftLotus** 是一个基于 SwiftNIO 的轻量级异步 TCP 网络服务框架。它的定位更接近 Workerman，而不是传统 HTTP MVC 框架：进程常驻、事件驱动、面向连接生命周期，并允许你在同一套核心之上构建 TCP 服务、自定义协议、WebSocket 网关、代理服务、游戏网关、IoT 网关和 HTTP 接口。
 
 项目提供 Swift 6 `async/await` 风格的易用 API，同时保留 SwiftNIO 的 EventLoop 模型。对于极短的热点路径，也提供同步 EventLoop 快路径，减少不必要的任务调度开销。
 
 ## 为什么选择 SwiftLotus？
 
-- **协议可插拔**：通过 `ProtocolInterface` 定义编解码和分包逻辑，可以快速实现文本协议、定长帧协议或自定义二进制协议。
-- **面向长连接**：Worker 内置连接管理，可以直接遍历 `worker.connections` 做广播、连接追踪和会话管理。
+- **协议可插拔**：通过 `ProtocolInterface` 定义编解码和分包逻辑，可以实现文本协议、定长帧协议或自定义二进制协议。
+- **面向 TCP 长连接**：Worker 内置连接管理，可以直接遍历 `worker.connections` 做广播、连接追踪和会话管理。
 - **异步优先，保留快路径**：普通业务使用 `onMessage` 编写 async 逻辑；性能敏感的短响应场景可以使用 `onMessageSync` 直接在 EventLoop 上写回。
+- **HTTP 是内置协议，不是唯一核心**：HTTP 和 WebSocket 开箱可用，但 SwiftLotus 的核心仍然是 TCP 连接生命周期、协议分包和事件派发。
 - **核心包保持精简**：根包只包含网络核心。Redis、MySQL、Postgres 适配器放在 `Addons/` 独立包中，按需引入。
 - **安全边界明确**：内置 payload 大小限制、TLS 配置校验和 WebSocket 分片聚合保护，避免常见资源耗尽问题。
 
 ## 功能特性
 
-- 基于 SwiftNIO 的 TCP/HTTP/WebSocket 网络处理
+- 基于 SwiftNIO 的 TCP 网络处理，内置 HTTP/WebSocket 协议支持
 - 内置 Text、Frame、HTTP/1.1、WebSocket 协议支持
 - Swift 6 并发安全适配，关键共享状态使用 `NIOLock` 保护
 - `Connection` 抽象支持 async 发送和 EventLoop future 快路径
@@ -40,22 +41,22 @@
 
 ## 性能基准
 
-本仓库在 `Benchmarks/HTTP` 中提供一套本机回归压测，用于比较最小化 `SwiftLotus<HttpProtocol>` 服务器和最小化 raw SwiftNIO HTTP 服务器的同机差距。它适合观察框架层开销，不等同于业界排行。
+本仓库在 `Benchmarks/TCP` 和 `Benchmarks/HTTP` 中提供本机回归压测，用于比较最小化 SwiftLotus 服务和最小化 raw SwiftNIO 服务的同机差距。它适合观察框架层开销，不等同于业界排行。
 
-最新本机数据：
+最新 TCP 文本 echo 数据：
 
 ```text
-压测工具:                        ApacheBench
-压测命令:                        ab -n 200000 -c 100 -k
-并发级别 (Concurrency Level):      100
+压测工具:                        TCPBenchmarkClient
+压测命令:                        --connections 100 --requests 200000
+连接数 (Connections):             100
 总完成请求数 (Complete requests):  200000
 失败请求数 (Failed requests):      0
 
-SwiftLotus HTTP:                 80707.74 requests/sec
-Raw SwiftNIO HTTP:               82151.65 requests/sec
+SwiftLotus TCP:                  80048.22 messages/sec
+Raw SwiftNIO TCP:                82205.91 messages/sec
 ```
 
-如果要做正式横向对比，建议使用 TechEmpower Framework Benchmarks。TFB 对响应格式、HTTP pipelining、`wrk`、并发等级和硬件环境都有统一要求；本仓库的 benchmark 保持轻量，方便开发阶段快速回归。
+HTTP 专项压测仍保留在 `Benchmarks/HTTP` 中。如果要做正式 HTTP 横向对比，建议使用 TechEmpower Framework Benchmarks。TFB 对响应格式、HTTP pipelining、`wrk`、并发等级和硬件环境都有统一要求；本仓库的 benchmark 保持轻量，方便开发阶段快速回归。
 
 ## 环境要求
 

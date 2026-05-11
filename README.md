@@ -17,16 +17,17 @@
     </a>
 </p>
 
-**SwiftLotus** is an open-source asynchronous networking framework for Swift, built for HTTP, WebSocket, long-lived TCP services, proxies, game gateways, IoT gateways, and custom protocol servers.
+**SwiftLotus** is an open-source asynchronous TCP networking framework for Swift. Its role is closer to Workerman than to a traditional HTTP MVC framework: it runs as a long-lived event-driven process, manages persistent connections, and lets you build TCP services, custom protocols, WebSocket gateways, proxies, game gateways, IoT gateways, and HTTP endpoints on top of the same core.
 
 Built directly on top of Apple's **SwiftNIO** and Swift 6 **Structured Concurrency (`async/await`)**, it keeps the API approachable while still exposing event-loop oriented fast paths for latency-sensitive handlers.
 
 ## 🚀 Why SwiftLotus?
 
-SwiftLotus provides a small, protocol-oriented layer over SwiftNIO:
+SwiftLotus provides a small, protocol-oriented TCP layer over SwiftNIO:
 - **Low Overhead**: Protocol framing is pluggable, so applications can keep parsing and encoding close to the wire format they actually need.
-- **Stateful by Design**: Managing persistent connections is built-in. Broadcasts and connection tracking can work directly with `worker.connections`.
+- **Long-Lived Connections by Design**: Managing persistent TCP connections is built-in. Broadcasts and connection tracking can work directly with `worker.connections`.
 - **Async by Default, Fast Path When Needed**: Use async callbacks for normal application logic, or `onMessageSync` for tiny non-blocking handlers that should stay on the channel event loop.
+- **HTTP as a Built-In Protocol, Not the Core**: HTTP and WebSocket are included, but the framework is designed around TCP connection lifecycle and protocol framing.
 - **On-Demand Ecosystem**: Bring your own database. Redis, MySQL, and Postgres adapters live in separate add-on packages, so the root package stays core-only.
 
 ## 📦 Features
@@ -37,23 +38,23 @@ SwiftLotus provides a small, protocol-oriented layer over SwiftNIO:
 - **Modular DB Access**: Optional add-on packages for `RediStack`, `MySQLNIO`, and `PostgresNIO`.
 - **EventLoop Timers**: Native NIO-backed timers for recurring jobs.
 
-## ⚡️ Performance Benchmark
-The local benchmark suite under `Benchmarks/HTTP` compares a minimal `SwiftLotus<HttpProtocol>` server with a minimal raw SwiftNIO HTTP server on the same machine. This is a regression benchmark for framework overhead, not an industry ranking.
+## ⚡️ Performance Benchmarks
+The local benchmark suites under `Benchmarks/TCP` and `Benchmarks/HTTP` compare minimal SwiftLotus servers with minimal raw SwiftNIO servers on the same machine. These are regression benchmarks for framework overhead, not industry rankings.
 
-Latest local run:
+Latest TCP line echo run:
 
 ```text
-Tool:                   ApacheBench
-Command:                ab -n 200000 -c 100 -k
-Concurrency Level:      100
+Tool:                   TCPBenchmarkClient
+Command:                --connections 100 --requests 200000
+Connections:            100
 Complete requests:      200000
 Failed requests:        0
 
-SwiftLotus HTTP:        80707.74 requests/sec
-Raw SwiftNIO HTTP:      82151.65 requests/sec
+SwiftLotus TCP:         80048.22 messages/sec
+Raw SwiftNIO TCP:       82205.91 messages/sec
 ```
 
-For formal cross-framework comparisons, use TechEmpower Framework Benchmarks. TFB uses stricter response requirements, HTTP pipelining, `wrk`, high concurrency levels, and controlled hardware. SwiftLotus' local benchmark is intentionally smaller and easier to run during development.
+The HTTP benchmark is still available under `Benchmarks/HTTP` for HTTP-specific overhead checks. For formal cross-framework HTTP comparisons, use TechEmpower Framework Benchmarks. TFB uses stricter response requirements, HTTP pipelining, `wrk`, high concurrency levels, and controlled hardware. SwiftLotus' local benchmarks are intentionally smaller and easier to run during development.
 
 ## 🛠 Environment Setup
 
