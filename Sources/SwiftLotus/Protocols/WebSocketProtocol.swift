@@ -82,8 +82,7 @@ final class LotusWebSocketHandler: ChannelInboundHandler, @unchecked Sendable {
     func handlerAdded(context: ChannelHandlerContext) {
         let conn = Connection<WebSocketProtocol>(channel: context.channel)
         self.connection = conn
-        
-        worker._addConnection(conn)
+        guard worker._registerConnection(conn, context: context) else { return }
         
         if let onConnect = worker.onConnect {
             Task { await onConnect(conn) }
@@ -179,6 +178,7 @@ final class LotusWebSocketHandler: ChannelInboundHandler, @unchecked Sendable {
         guard let conn = self.connection else { return }
         
         worker._removeConnection(conn)
+        worker.writeRuntimeStatus()
         
         if let onClose = worker.onClose {
             Task { await onClose(conn) }

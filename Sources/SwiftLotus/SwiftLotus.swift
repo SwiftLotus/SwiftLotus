@@ -19,6 +19,7 @@ public final class SwiftLotus<P: ProtocolInterface>: @unchecked Sendable {
     /// SSL Context for enabling TLS/SSL
     public var sslContext: NIOSSLContext?
     public var enableSignalHandlers: Bool
+    public var reusePort: Bool
 
     /// Adds an NIO idle handler when set. The event is delivered to `onIdle`.
     public var idleTimeout: TimeAmount?
@@ -28,6 +29,12 @@ public final class SwiftLotus<P: ProtocolInterface>: @unchecked Sendable {
 
     /// Optional write-buffer watermarks for backpressure.
     public var writeBufferWaterMark: ChannelOptions.Types.WriteBufferWaterMark?
+
+    /// Connection admission and authentication-timeout controls.
+    public var connectionLimits: ConnectionLimits = .none
+
+    /// Whether this worker exits on SIGUSR1 after `onWorkerReload`.
+    public var reloadable: Bool
     
     // MARK: - Callbacks
     
@@ -93,12 +100,25 @@ public final class SwiftLotus<P: ProtocolInterface>: @unchecked Sendable {
         get { lock.withLock { _onWorkerStop } }
         set { lock.withLock { _onWorkerStop = newValue } }
     }
+
+    private var _onWorkerReload: (@Sendable (SwiftLotus<P>) async -> Void)?
+    public var onWorkerReload: (@Sendable (SwiftLotus<P>) async -> Void)? {
+        get { lock.withLock { _onWorkerReload } }
+        set { lock.withLock { _onWorkerReload = newValue } }
+    }
+
+    private var _onConnectionRejected: (@Sendable (String?, ConnectionRejectionReason) async -> Void)?
+    public var onConnectionRejected: (@Sendable (String?, ConnectionRejectionReason) async -> Void)? {
+        get { lock.withLock { _onConnectionRejected } }
+        set { lock.withLock { _onConnectionRejected = newValue } }
+    }
     
     // MARK: - Internals
     
     // Protect connections dictionary
     private let connectionsLock = NIOLock()
     private var _connections: [UUID: Connection<P>] = [:]
+    private var governor = ConnectionGovernor()
 
     /// User/group oriented connection registry for long-lived services.
     public let registry = ConnectionRegistry<P>()
@@ -114,7 +134,10 @@ public final class SwiftLotus<P: ProtocolInterface>: @unchecked Sendable {
     }
     
     internal func _removeConnection(_ conn: Connection<P>) {
-        let _ = connectionsLock.withLock { _connections.removeValue(forKey: conn.id) }
+        let _ = connectionsLock.withLock {
+            governor.recordClosedConnection(id: conn.id)
+            return _connections.removeValue(forKey: conn.id)
+        }
         registry.remove(conn)
     }
     
@@ -123,6 +146,7 @@ public final class SwiftLotus<P: ProtocolInterface>: @unchecked Sendable {
     private var host: String = "0.0.0.0"
     private var port: Int = 0
     private var scheme: String = "tcp"
+    public private(set) var endpoint: SwiftLotusEndpoint = .tcp(host: "0.0.0.0", port: 0)
     private var signalSources: [DispatchSourceSignal] = []
     private var configurationError: SwiftLotusError?
     private let lifecycleLock = NIOLock()
@@ -134,15 +158,29 @@ public final class SwiftLotus<P: ProtocolInterface>: @unchecked Sendable {
     // MARK: - Initialization
     
     public init(name: String = "SwiftLotus", count: Int = System.coreCount, uri: String, enableSignalHandlers: Bool = true) {
+        let runtimeEnvironment = SwiftLotusRuntimeEnvironment.current
         self.name = name
         self.count = count
         self.uri = uri
         self.enableSignalHandlers = enableSignalHandlers
+        self.reusePort = runtimeEnvironment.reusePort
+        self.reloadable = ProcessInfo.processInfo.environment["SWIFTLOTUS_RELOADABLE"] != "0"
         self.group = MultiThreadedEventLoopGroup(numberOfThreads: count)
         parseUri(uri)
     }
     
     private func parseUri(_ uri: String) {
+        if uri.hasPrefix("unix://") {
+            let path = URL(string: uri)?.path ?? String(uri.dropFirst("unix://".count))
+            guard !path.isEmpty else {
+                configurationError = .invalidURI(uri)
+                return
+            }
+            self.scheme = "unix"
+            self.endpoint = .unix(path: path)
+            return
+        }
+
         guard let url = URL(string: uri),
               let h = url.host,
               let p = url.port else {
@@ -152,6 +190,7 @@ public final class SwiftLotus<P: ProtocolInterface>: @unchecked Sendable {
         self.host = h
         self.port = p
         self.scheme = url.scheme ?? "tcp"
+        self.endpoint = .tcp(host: h, port: p)
     }
     
     // MARK: - Runtime
@@ -179,14 +218,27 @@ public final class SwiftLotus<P: ProtocolInterface>: @unchecked Sendable {
         if let writeBufferWaterMark {
             bootstrap = bootstrap.childChannelOption(ChannelOptions.writeBufferWaterMark, value: writeBufferWaterMark)
         }
+
+        #if os(macOS) || os(Linux)
+        if reusePort, let option = SwiftLotusSocketOptions.reusePort {
+            bootstrap = bootstrap.serverChannelOption(option, value: 1)
+        }
+        #endif
         
         do {
-            let channel = try await bootstrap.bind(host: host, port: port).get()
+            let channel: Channel
+            switch endpoint {
+            case .tcp(let host, let port):
+                channel = try await bootstrap.bind(host: host, port: port).get()
+            case .unix(let path):
+                channel = try await bootstrap.bind(unixDomainSocketPath: path).get()
+            }
             lifecycleLock.withLock {
                 serverChannel = channel
                 isRunning = true
                 startedAt = Date()
             }
+            writeRuntimeStatus()
             print("SwiftLotus [\(name)] started listening on \(uri)")
             if let onWorkerStart {
                 Task { await onWorkerStart(self) }
@@ -197,6 +249,7 @@ public final class SwiftLotus<P: ProtocolInterface>: @unchecked Sendable {
             lifecycleLock.withLock {
                 isRunning = false
             }
+            writeRuntimeStatus()
             if let onWorkerStop {
                 Task { await onWorkerStop(self) }
             }
@@ -205,6 +258,7 @@ public final class SwiftLotus<P: ProtocolInterface>: @unchecked Sendable {
             lifecycleLock.withLock {
                 isRunning = false
             }
+            writeRuntimeStatus()
             if let onError {
                 Task { await onError(nil, error) }
             }
@@ -276,17 +330,22 @@ public final class SwiftLotus<P: ProtocolInterface>: @unchecked Sendable {
     
     private func setupSignalHandler() {
         #if !os(Windows)
-        self.signalSources = distinctSignalSources(for: [SIGINT, SIGTERM])
-        for source in self.signalSources {
+        let signals = [SIGINT, SIGTERM, SIGUSR1]
+        self.signalSources = distinctSignalSources(for: signals)
+        for (signal, source) in zip(signals, self.signalSources) {
             source.setEventHandler {
-                print("\nReceived signal, shutting down...")
                 Task {
-                    do {
-                        try await self.stop()
-                        exit(0)
-                    } catch {
-                        print("Error shutting down: \(error)")
-                        exit(1)
+                    if signal == SIGUSR1 {
+                        await self.handleReloadSignal()
+                    } else {
+                        print("\nReceived signal, shutting down...")
+                        do {
+                            try await self.stop()
+                            exit(0)
+                        } catch {
+                            print("Error shutting down: \(error)")
+                            exit(1)
+                        }
                     }
                 }
             }
@@ -306,6 +365,21 @@ public final class SwiftLotus<P: ProtocolInterface>: @unchecked Sendable {
     }
     #endif
 
+    private func handleReloadSignal() async {
+        if let onWorkerReload {
+            await onWorkerReload(self)
+        }
+
+        if reloadable {
+            do {
+                try await stop()
+                exit(0)
+            } catch {
+                exit(1)
+            }
+        }
+    }
+
     public var status: SwiftLotusStatus {
         lifecycleLock.withLock {
             SwiftLotusStatus(
@@ -316,6 +390,42 @@ public final class SwiftLotus<P: ProtocolInterface>: @unchecked Sendable {
                 isRunning: isRunning,
                 startedAt: startedAt
             )
+        }
+    }
+
+    @discardableResult
+    internal func _registerConnection(_ conn: Connection<P>, context: ChannelHandlerContext) -> Bool {
+        let remoteIP = conn.remoteAddress?.ipAddress
+        let decision = connectionsLock.withLock { () -> ConnectionDecision in
+            governor.limits = connectionLimits
+            let decision = governor.evaluateConnection(remoteIP: remoteIP)
+            if decision == .accepted {
+                governor.recordAcceptedConnection(id: conn.id, remoteIP: remoteIP)
+            }
+            return decision
+        }
+
+        switch decision {
+        case .accepted:
+            _addConnection(conn)
+            scheduleAuthenticationTimeoutIfNeeded(conn)
+            writeRuntimeStatus()
+            return true
+        case .rejected(let reason):
+            if let onConnectionRejected {
+                Task { await onConnectionRejected(remoteIP, reason) }
+            }
+            context.close(promise: nil)
+            return false
+        }
+    }
+
+    private func scheduleAuthenticationTimeoutIfNeeded(_ connection: Connection<P>) {
+        guard let timeout = connectionLimits.authenticationTimeout else { return }
+        connection.eventLoop.scheduleTask(in: timeout) {
+            if !connection.isAuthenticated && connection.isActive {
+                connection.closeFuture()
+            }
         }
     }
 
@@ -389,6 +499,24 @@ public final class SwiftLotus<P: ProtocolInterface>: @unchecked Sendable {
             Task { await onError(connection, error) }
         }
     }
+
+    internal func writeRuntimeStatus() {
+        guard let runtimeDirectory = SwiftLotusRuntimeEnvironment.current.runtimeDirectory else {
+            return
+        }
+
+        let currentStatus = status
+        let runtimeStatus = WorkerRuntimeStatus(
+            name: name,
+            uri: uri,
+            pid: ProcessInfo.processInfo.processIdentifier,
+            workerIndex: SwiftLotusRuntimeEnvironment.current.workerIndex,
+            connectionCount: registry.connectionCount,
+            startedAt: currentStatus.startedAt,
+            updatedAt: Date()
+        )
+        try? RuntimeStateStore(runtimeDirectory: runtimeDirectory).saveStatus(runtimeStatus)
+    }
 }
 
 // MARK: - Handlers
@@ -438,8 +566,7 @@ final class LotusHandler<P: ProtocolInterface>: ChannelInboundHandler, @unchecke
     func channelActive(context: ChannelHandlerContext) {
         let conn = Connection<P>(channel: context.channel)
         self.connection = conn
-        
-        worker._addConnection(conn)
+        guard worker._registerConnection(conn, context: context) else { return }
         
         if let onConnect = worker.onConnect {
             Task { await onConnect(conn) }
@@ -475,6 +602,7 @@ final class LotusHandler<P: ProtocolInterface>: ChannelInboundHandler, @unchecke
         guard let conn = self.connection else { return }
         
         worker._removeConnection(conn)
+        worker.writeRuntimeStatus()
         
         if let onClose = worker.onClose {
             Task { await onClose(conn) }

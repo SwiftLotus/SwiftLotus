@@ -38,15 +38,19 @@
 - Swift 6 并发安全适配，关键共享状态使用 `NIOLock` 保护
 - `Connection` 抽象支持 async 发送和 EventLoop future 快路径
 - 单机连接注册表：支持绑定 uid、加入 group、按用户发送、按分组发送和广播
-- 运行时生命周期回调：`onWorkerStart`、`onWorkerStop`、`onError`、`onIdle`、`onBufferFull`、`onBufferDrain`
+- 运行时生命周期回调：`onWorkerStart`、`onWorkerStop`、`onWorkerReload`、`onError`、`onIdle`、`onBufferFull`、`onBufferDrain`
 - 运行状态快照：可读取 worker 名称、URI、线程数、运行状态、启动时间和当前连接数
+- CLI 运行时：`swiftlotus start|stop|restart|reload|status|connections` 可管理已编译的 SwiftLotus 应用
+- Gateway Register 基础能力：`GatewayRouteTable`、`GatewayControlMessage` 和 register client/server 帮助搭建分布式路由
+- UDP 和 Unix Socket：支持 `SwiftLotusUDP` datagram 服务，以及 `unix:///path.sock` stream 监听
+- 连接治理：支持最大连接数、单 IP 连接数限制和认证超时
 - `AsyncTcpConnection` 支持当前连接句柄和固定间隔自动重连策略
 - 可选数据库 add-on：Redis、MySQL、Postgres
 - NIO EventLoop 定时器封装
 
 ### 与 Workerman 的能力边界
 
-SwiftLotus 现在覆盖了 Workerman 风格长连接应用最核心的单进程能力：生命周期回调、连接追踪、uid/group 路由、空闲连接清理、发送背压、定时器、自定义协议和异步 TCP 出站连接。它目前还没有实现 Workerman 的 master/worker 多进程管理、CLI `status/reload` 命令、UDP/Unix Socket 监听，以及 GatewayWorker 那种分布式连接路由。
+SwiftLotus 现在已经覆盖大部分 Workerman 风格基础构件：生命周期回调、连接追踪、uid/group 路由、空闲连接清理、发送背压、定时器、自定义协议、异步 TCP 出站连接、UDP 监听、Unix Domain Socket、CLI 进程管理、reload 信号，以及面向分布式网关的 register 路由表。当前运行时管理器是 v1：它负责启动和发送信号给已编译的 Swift 可执行文件；更复杂的守护、自动拉起和完整 GatewayWorker 投递平面可以在这套基础上继续扩展。
 
 ## 性能基准
 
@@ -198,7 +202,51 @@ client.onMessage = { _, message in
 client.connect()
 ```
 
-### 5. Redis add-on 示例
+### 5. CLI 运行时
+
+先构建应用，再用 CLI 管理 worker 进程：
+
+```bash
+swift build -c release
+.build/release/swiftlotus start \
+  --name chat \
+  --command .build/release/YourChatServer \
+  --workers 4 \
+  --runtime-dir .swiftlotus \
+  --reuse-port
+
+.build/release/swiftlotus status --runtime-dir .swiftlotus
+.build/release/swiftlotus reload --runtime-dir .swiftlotus
+.build/release/swiftlotus connections --runtime-dir .swiftlotus
+.build/release/swiftlotus stop --runtime-dir .swiftlotus
+```
+
+每个 worker 会收到 `SWIFTLOTUS_WORKER_INDEX`、`SWIFTLOTUS_WORKER_COUNT`、`SWIFTLOTUS_REUSE_PORT`、`SWIFTLOTUS_RUNTIME_DIR` 和 `SWIFTLOTUS_RUNTIME_NAME`。`SIGUSR1` 会触发 `onWorkerReload`；reloadable worker 会在回调后退出，方便运行时启动新进程。
+
+### 6. UDP 和 Unix Socket 服务
+
+```swift
+let udp = SwiftLotusUDP<DatagramTextProtocol>(name: "UDPStats", uri: "udp://0.0.0.0:9000")
+udp.onMessage = { address, message, server in
+    server.send("ack: \(message)", to: address)
+}
+
+let unixWorker = SwiftLotus<TextProtocol>(name: "LocalAgent", uri: "unix:///tmp/swiftlotus-agent.sock")
+```
+
+### 7. Register 路由基础能力
+
+```swift
+let table = GatewayRouteTable()
+table.register(GatewayNode(id: "gateway-a", address: "127.0.0.1:9001"))
+table.bind(connectionId: "c1", uid: "alice", nodeId: "gateway-a")
+table.join(connectionId: "c1", group: "room-1", nodeId: "gateway-a")
+
+let uidRoutes = table.routes(forUid: "alice")
+let groupRoutes = table.routes(inGroup: "room-1")
+```
+
+### 8. Redis add-on 示例
 
 ```swift
 import SwiftLotus
@@ -222,7 +270,7 @@ struct App {
 }
 ```
 
-### 6. EventLoop 定时器
+### 9. EventLoop 定时器
 
 ```swift
 let timer = SwiftLotusTimer.add(timeInterval: 1.0) {
@@ -238,6 +286,8 @@ let timer = SwiftLotusTimer.add(timeInterval: 1.0) {
 - **ProtocolInterface**：定义原始 `ByteBuffer` 如何分包、解码和编码。
 - **Connection**：表示一个客户端连接，按协议泛型化，提供 async 发送、future 快路径和读背压控制。
 - **ConnectionRegistry**：按连接 id、uid、group 追踪在线连接，服务于 Workerman 风格长连接应用。
+- **RuntimeStateStore / SwiftLotusProcessManager**：管理 worker 元数据、状态文件、CLI 进程生命周期和 reload 信号。
+- **GatewayRouteTable**：维护分布式 uid/group 路由索引，用于 register 风格网关部署。
 
 ## License
 

@@ -15,6 +15,7 @@ let package = Package(
         
         // Example
         .executable(name: "SwiftLotusExample", targets: ["SwiftLotusExample"]),
+        .executable(name: "swiftlotus", targets: ["SwiftLotusCLI"]),
     ],
     dependencies: [
         // Core Networking Dependencies
@@ -39,6 +40,10 @@ let package = Package(
         // Tests & Example
         .executableTarget(
             name: "SwiftLotusExample",
+            dependencies: ["SwiftLotus"]
+        ),
+        .executableTarget(
+            name: "SwiftLotusCLI",
             dependencies: ["SwiftLotus"]
         ),
         .testTarget(

@@ -11,6 +11,7 @@ public final class Connection<P: ProtocolInterface>: @unchecked Sendable, Identi
     let channel: Channel
     private let stateLock = NIOLock()
     private var _isReadPaused = false
+    private var _isAuthenticated = false
     
     public var remoteAddress: SocketAddress? {
         channel.remoteAddress
@@ -30,6 +31,10 @@ public final class Connection<P: ProtocolInterface>: @unchecked Sendable, Identi
 
     public var isReadPaused: Bool {
         stateLock.withLock { _isReadPaused }
+    }
+
+    public var isAuthenticated: Bool {
+        stateLock.withLock { _isAuthenticated }
     }
     
     init(channel: Channel) {
@@ -84,6 +89,12 @@ public final class Connection<P: ProtocolInterface>: @unchecked Sendable, Identi
             }
         }
         return future
+    }
+
+    public func markAuthenticated() {
+        stateLock.withLock {
+            _isAuthenticated = true
+        }
     }
 }
 

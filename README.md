@@ -37,15 +37,19 @@ SwiftLotus provides a small, protocol-oriented TCP layer over SwiftNIO:
 - **OOM Protection**: Built-in generic payload size limiters (Memory Shields).
 - **Built-in Protocols**: TCP, HTTP/1.1, WebSocket, Text (Newline), and Frame (Length-prefixed binary).
 - **Connection Registry**: Bind connections to user ids, join groups, send to users, send to groups, and broadcast from one worker.
-- **Runtime Lifecycle Hooks**: `onWorkerStart`, `onWorkerStop`, `onError`, `onIdle`, `onBufferFull`, and `onBufferDrain`.
+- **Runtime Lifecycle Hooks**: `onWorkerStart`, `onWorkerStop`, `onWorkerReload`, `onError`, `onIdle`, `onBufferFull`, and `onBufferDrain`.
 - **Runtime Status Snapshot**: Inspect worker name, URI, thread count, running state, start time, and live connection count.
+- **CLI Runtime**: `swiftlotus start|stop|restart|reload|status|connections` can manage compiled SwiftLotus applications with worker environment variables and status files.
+- **Gateway Register Primitives**: `GatewayRouteTable`, `GatewayControlMessage`, and register client/server helpers provide the base for GatewayWorker-style distributed routing.
+- **UDP and Unix Socket Support**: Run datagram services with `SwiftLotusUDP` and bind stream workers with `unix:///path.sock`.
+- **Connection Governance**: Configure max connections, per-IP limits, and authentication timeouts.
 - **Async TCP Client Reconnects**: `AsyncTcpConnection` can expose its current connection and use fixed-delay reconnect policies.
 - **Modular DB Access**: Optional add-on packages for `RediStack`, `MySQLNIO`, and `PostgresNIO`.
 - **EventLoop Timers**: Native NIO-backed timers for recurring jobs.
 
 ### Workerman-Inspired Scope
 
-SwiftLotus now covers the core single-process TCP service pieces that are most important for Workerman-style long-lived applications: lifecycle callbacks, connection tracking, uid/group routing, idle cleanup, send backpressure, timers, custom protocols, and async outbound TCP clients. It does not yet implement Workerman's master/worker process manager, CLI `status/reload` commands, UDP/Unix socket listeners, or GatewayWorker-style distributed connection routing.
+SwiftLotus now covers most of the Workerman-style building blocks in a SwiftNIO shape: lifecycle callbacks, connection tracking, uid/group routing, idle cleanup, send backpressure, timers, custom protocols, async outbound TCP clients, UDP listeners, Unix domain sockets, a CLI process manager, reload signals, and register-table primitives for distributed gateway routing. The runtime manager is intentionally a v1: it starts and signals compiled Swift executables, while advanced supervision policies and a full GatewayWorker-compatible delivery plane can be layered on top.
 
 ## ⚡️ Performance Benchmarks
 The local benchmark suites under `Benchmarks/TCP` and `Benchmarks/HTTP` compare minimal SwiftLotus servers with minimal raw SwiftNIO servers on the same machine. These are regression benchmarks for framework overhead, not industry rankings.
@@ -197,7 +201,51 @@ client.onMessage = { _, message in
 client.connect()
 ```
 
-### 4. Native Database Connectivity (Redis Example)
+### 4. CLI Runtime
+
+Build your application first, then let the CLI manage worker processes:
+
+```bash
+swift build -c release
+.build/release/swiftlotus start \
+  --name chat \
+  --command .build/release/YourChatServer \
+  --workers 4 \
+  --runtime-dir .swiftlotus \
+  --reuse-port
+
+.build/release/swiftlotus status --runtime-dir .swiftlotus
+.build/release/swiftlotus reload --runtime-dir .swiftlotus
+.build/release/swiftlotus connections --runtime-dir .swiftlotus
+.build/release/swiftlotus stop --runtime-dir .swiftlotus
+```
+
+Each worker receives `SWIFTLOTUS_WORKER_INDEX`, `SWIFTLOTUS_WORKER_COUNT`, `SWIFTLOTUS_REUSE_PORT`, `SWIFTLOTUS_RUNTIME_DIR`, and `SWIFTLOTUS_RUNTIME_NAME`. `SIGUSR1` triggers `onWorkerReload`; reloadable workers exit after the callback so the manager can start fresh processes.
+
+### 5. UDP and Unix Socket Services
+
+```swift
+let udp = SwiftLotusUDP<DatagramTextProtocol>(name: "UDPStats", uri: "udp://0.0.0.0:9000")
+udp.onMessage = { address, message, server in
+    server.send("ack: \(message)", to: address)
+}
+
+let unixWorker = SwiftLotus<TextProtocol>(name: "LocalAgent", uri: "unix:///tmp/swiftlotus-agent.sock")
+```
+
+### 6. Register Routing Primitives
+
+```swift
+let table = GatewayRouteTable()
+table.register(GatewayNode(id: "gateway-a", address: "127.0.0.1:9001"))
+table.bind(connectionId: "c1", uid: "alice", nodeId: "gateway-a")
+table.join(connectionId: "c1", group: "room-1", nodeId: "gateway-a")
+
+let uidRoutes = table.routes(forUid: "alice")
+let groupRoutes = table.routes(inGroup: "room-1")
+```
+
+### 7. Native Database Connectivity (Redis Example)
 Use the Redis add-on when your application needs shared Redis access alongside SwiftLotus networking.
 
 ```swift
@@ -224,7 +272,7 @@ struct App {
 }
 ```
 
-### 5. Precision EventLoop Timers
+### 8. Precision EventLoop Timers
 ```swift
 // Executes on an EventLoop-backed timer.
 let timer = SwiftLotusTimer.add(timeInterval: 1.0) {
@@ -239,6 +287,8 @@ let timer = SwiftLotusTimer.add(timeInterval: 1.0) {
 *   **ProtocolInterface**: Defines how raw `ByteBuffer`s are framed, encoded, and decoded. Unopinionated.
 *   **Connection**: Represents a client connection, generic over the protocol, with async send, future fast paths, and read backpressure controls.
 *   **ConnectionRegistry**: Tracks live connections by id, uid, and group for Workerman-style long-lived services.
+*   **RuntimeStateStore / SwiftLotusProcessManager**: Manage worker metadata, status files, CLI process lifecycle, and reload signals.
+*   **GatewayRouteTable**: Maintains distributed uid/group route indexes for register-style gateway deployments.
 
 ## 📄 License
 
