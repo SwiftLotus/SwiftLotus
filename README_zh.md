@@ -276,7 +276,7 @@ struct App {
 这些组件用于补齐长连接服务常见的外围能力，同时不把核心包做成厚重的应用框架。
 
 ```swift
-let http = SwiftLotusHTTPClient()
+let http = SwiftLotusHTTPClient(requestTimeout: .seconds(5))
 let response = try await http.get("http://127.0.0.1:8080/health")
 print(response.status, response.body)
 

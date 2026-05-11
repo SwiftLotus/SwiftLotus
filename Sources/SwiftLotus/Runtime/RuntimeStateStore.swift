@@ -100,4 +100,11 @@ public final class RuntimeStateStore: @unchecked Sendable {
             }
             .sorted { $0.pid < $1.pid }
     }
+
+    public func clearStatuses() throws {
+        guard FileManager.default.fileExists(atPath: statusDirectory.path) else {
+            return
+        }
+        try FileManager.default.removeItem(at: statusDirectory)
+    }
 }

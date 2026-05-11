@@ -50,15 +50,18 @@ public struct SwiftLotusHTTPClientResponse: Sendable, Equatable {
 public final class SwiftLotusHTTPClient: @unchecked Sendable {
     private let group: EventLoopGroup
     private let sslContext: NIOSSLContext?
+    private let requestTimeout: TimeAmount?
     private let maxResponseBodyBytes: Int
 
     public init(
         group: EventLoopGroup = GlobalEventLoop.sharedGroup,
         sslContext: NIOSSLContext? = nil,
+        requestTimeout: TimeAmount? = .seconds(30),
         maxResponseBodyBytes: Int = 16 * 1024 * 1024
     ) {
         self.group = group
         self.sslContext = sslContext
+        self.requestTimeout = requestTimeout
         self.maxResponseBodyBytes = max(0, maxResponseBodyBytes)
     }
 
@@ -93,6 +96,7 @@ public final class SwiftLotusHTTPClient: @unchecked Sendable {
                     SwiftLotusHTTPClientHandler(
                         request: request,
                         promise: promise,
+                        requestTimeout: self.requestTimeout,
                         maxResponseBodyBytes: self.maxResponseBodyBytes
                     )
                 ))
@@ -116,19 +120,38 @@ private final class SwiftLotusHTTPClientHandler: ChannelInboundHandler, @uncheck
 
     private let request: SwiftLotusHTTPRequest
     private let promise: EventLoopPromise<SwiftLotusHTTPClientResponse>
+    private let requestTimeout: TimeAmount?
     private let maxResponseBodyBytes: Int
     private var responseHead: HTTPResponseHead?
     private var body = ByteBuffer()
     private var completed = false
+    private var timeoutTask: Scheduled<Void>?
+    private weak var handlerContext: ChannelHandlerContext?
 
     init(
         request: SwiftLotusHTTPRequest,
         promise: EventLoopPromise<SwiftLotusHTTPClientResponse>,
+        requestTimeout: TimeAmount?,
         maxResponseBodyBytes: Int
     ) {
         self.request = request
         self.promise = promise
+        self.requestTimeout = requestTimeout
         self.maxResponseBodyBytes = maxResponseBodyBytes
+    }
+
+    func handlerAdded(context: ChannelHandlerContext) {
+        handlerContext = context
+        guard let requestTimeout else { return }
+        timeoutTask = context.eventLoop.scheduleTask(in: requestTimeout) { [weak self] in
+            self?.failRequestTimeout()
+        }
+    }
+
+    func handlerRemoved(context: ChannelHandlerContext) {
+        timeoutTask?.cancel()
+        timeoutTask = nil
+        handlerContext = nil
     }
 
     func channelActive(context: ChannelHandlerContext) {
@@ -184,6 +207,8 @@ private final class SwiftLotusHTTPClientHandler: ChannelInboundHandler, @uncheck
     private func finish(_ result: Result<SwiftLotusHTTPClientResponse, Error>, context: ChannelHandlerContext?) {
         guard !completed else { return }
         completed = true
+        timeoutTask?.cancel()
+        timeoutTask = nil
 
         switch result {
         case .success(let response):
@@ -193,5 +218,9 @@ private final class SwiftLotusHTTPClientHandler: ChannelInboundHandler, @uncheck
         }
 
         context?.close(promise: nil)
+    }
+
+    private func failRequestTimeout() {
+        finish(.failure(SwiftLotusError.requestTimedOut), context: handlerContext)
     }
 }

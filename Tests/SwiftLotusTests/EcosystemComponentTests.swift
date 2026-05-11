@@ -115,6 +115,46 @@ final class EcosystemComponentTests: XCTestCase {
         }
     }
 
+    func testHTTPClientTimesOutWhenServerDoesNotRespond() async throws {
+        let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+        let server = try await ServerBootstrap(group: group)
+            .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
+            .childChannelInitializer { channel in
+                do {
+                    try channel.pipeline.syncOperations.configureHTTPServerPipeline(
+                        withPipeliningAssistance: true,
+                        withServerUpgrade: nil,
+                        withErrorHandling: true
+                    )
+                    try channel.pipeline.syncOperations.addHandler(SilentHTTPServerHandler())
+                    return channel.eventLoop.makeSucceededFuture(())
+                } catch {
+                    return channel.eventLoop.makeFailedFuture(error)
+                }
+            }
+            .bind(host: "127.0.0.1", port: 0)
+            .get()
+
+        addTeardownBlock {
+            try? server.close().wait()
+            try? group.syncShutdownGracefully()
+        }
+
+        let port = try XCTUnwrap(server.localAddress?.port)
+        let client = SwiftLotusHTTPClient(group: group, requestTimeout: .milliseconds(50))
+
+        do {
+            _ = try await withTimeout(seconds: 1.0) {
+                try await client.get("http://127.0.0.1:\(port)/silent")
+            }
+            XCTFail("Expected request timeout")
+        } catch TestTimeoutError.timedOut {
+            XCTFail("HTTP client timeout should complete the request")
+        } catch {
+            XCTAssertEqual(error as? SwiftLotusError, .requestTimedOut)
+        }
+    }
+
     func testEventBusPublishesAndUnsubscribes() async {
         let bus = SwiftLotusEventBus<String>()
         let recorder = MessageRecorder()
@@ -143,6 +183,19 @@ final class EcosystemComponentTests: XCTestCase {
         XCTAssertEqual(components.minute, 0)
         XCTAssertEqual(components.second, 0)
         XCTAssertGreaterThan(next, start)
+    }
+
+    func testScheduleRejectsNonPositiveOrNonFiniteIntervals() {
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+
+        XCTAssertNil(SwiftLotusSchedule.once(after: 0).nextRun(after: start))
+        XCTAssertNil(SwiftLotusSchedule.every(seconds: -1).nextRun(after: start))
+        XCTAssertNil(SwiftLotusSchedule.every(seconds: .infinity).nextRun(after: start))
+    }
+
+    func testTimerRejectsNonPositiveOrNonFiniteIntervals() {
+        XCTAssertTrue(SwiftLotusTimer.add(timeInterval: 0) {}.isCancelled)
+        XCTAssertTrue(SwiftLotusTimer.add(timeInterval: -.infinity) {}.isCancelled)
     }
 
     func testMetricsCountersGaugesAndDurationsSnapshot() {
@@ -203,6 +256,14 @@ private final class CloseOnActiveHandler: ChannelInboundHandler, @unchecked Send
 
     func channelActive(context: ChannelHandlerContext) {
         context.close(promise: nil)
+    }
+}
+
+private final class SilentHTTPServerHandler: ChannelInboundHandler, @unchecked Sendable {
+    typealias InboundIn = HTTPServerRequestPart
+
+    func channelRead(context: ChannelHandlerContext, data: NIOAny) {
+        _ = unwrapInboundIn(data)
     }
 }
 

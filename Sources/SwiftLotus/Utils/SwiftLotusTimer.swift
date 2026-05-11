@@ -45,6 +45,10 @@ public struct SwiftLotusTimer {
     @discardableResult
     public static func add(timeInterval: TimeInterval, persistent: Bool = true, callback: @escaping @Sendable () async -> Void) -> SwiftLotusTimer.Handle {
         let handle = Handle()
+        guard timeInterval.isFinite, timeInterval > 0 else {
+            handle.cancel()
+            return handle
+        }
         let loop = GlobalEventLoop.sharedGroup.next()
         let delay = TimeAmount.nanoseconds(Int64(timeInterval * 1_000_000_000))
         

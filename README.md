@@ -277,7 +277,7 @@ struct App {
 Use the built-in utility components for common long-running service needs without turning the core package into a full application framework.
 
 ```swift
-let http = SwiftLotusHTTPClient()
+let http = SwiftLotusHTTPClient(requestTimeout: .seconds(5))
 let response = try await http.get("http://127.0.0.1:8080/health")
 print(response.status, response.body)
 

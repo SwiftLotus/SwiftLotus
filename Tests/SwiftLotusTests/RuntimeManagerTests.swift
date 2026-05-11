@@ -47,6 +47,60 @@ final class RuntimeManagerTests: XCTestCase {
         try? FileManager.default.removeItem(at: directory)
     }
 
+    func testRuntimeStateStoreClearsStatusFiles() throws {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("swiftlotus-runtime-status-tests-\(UUID().uuidString)")
+        let store = RuntimeStateStore(runtimeDirectory: directory)
+        let status = WorkerRuntimeStatus(
+            name: "chat",
+            uri: "tcp://127.0.0.1:2346",
+            pid: 12345,
+            workerIndex: 0,
+            connectionCount: 10,
+            startedAt: Date(timeIntervalSince1970: 100),
+            updatedAt: Date(timeIntervalSince1970: 200)
+        )
+
+        try store.saveStatus(status)
+        XCTAssertEqual(try store.loadStatuses(), [status])
+
+        try store.clearStatuses()
+
+        XCTAssertTrue(try store.loadStatuses().isEmpty)
+        try? FileManager.default.removeItem(at: directory)
+    }
+
+    func testProcessManagerRefusesToStartWhenWorkersAreAlreadyRunning() throws {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("swiftlotus-running-tests-\(UUID().uuidString)")
+        let store = RuntimeStateStore(runtimeDirectory: directory)
+        let record = WorkerProcessRecord(
+            id: "chat-0",
+            name: "chat",
+            pid: ProcessInfo.processInfo.processIdentifier,
+            workerIndex: 0,
+            startedAt: Date(timeIntervalSince1970: 100),
+            executable: "/tmp/chat-server",
+            arguments: [],
+            reloadable: true
+        )
+        try store.save(RuntimeState(records: [record]))
+
+        let spec = WorkerProcessSpec(
+            name: "chat",
+            executable: "/tmp/chat-server",
+            runtimeDirectory: directory
+        )
+
+        XCTAssertThrowsError(try SwiftLotusProcessManager().start(spec)) { error in
+            guard case SwiftLotusProcessManagerError.workersAlreadyRunning(let records) = error else {
+                return XCTFail("Expected workersAlreadyRunning, got \(error)")
+            }
+            XCTAssertEqual(records, [record])
+        }
+        try? FileManager.default.removeItem(at: directory)
+    }
+
     func testRuntimeEnvironmentReadsWorkerVariables() {
         let environment = SwiftLotusRuntimeEnvironment(environment: [
             "SWIFTLOTUS_WORKER_INDEX": "2",

@@ -9,6 +9,9 @@ public enum SwiftLotusSchedule: Sendable, Equatable {
     public func nextRun(after date: Date = Date()) -> Date? {
         switch self {
         case .once(let seconds), .every(let seconds):
+            guard seconds.isFinite, seconds > 0 else {
+                return nil
+            }
             return date.addingTimeInterval(seconds)
         case .daily(let hour, let minute, let second, let calendar):
             var components = calendar.dateComponents([.year, .month, .day], from: date)
@@ -54,8 +57,15 @@ public enum SwiftLotusScheduler {
     ) {
         let loop = GlobalEventLoop.sharedGroup.next()
         let now = Date()
-        let next = schedule.nextRun(after: now) ?? now
+        guard let next = schedule.nextRun(after: now) else {
+            handle.cancel()
+            return
+        }
         let delay = max(0, next.timeIntervalSince(now))
+        guard delay.isFinite, delay <= Double(Int64.max) / 1_000_000_000 else {
+            handle.cancel()
+            return
+        }
         let timeAmount = TimeAmount.nanoseconds(Int64(delay * 1_000_000_000))
 
         let scheduled = loop.scheduleTask(in: timeAmount) {

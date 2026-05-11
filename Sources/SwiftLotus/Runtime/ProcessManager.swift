@@ -6,8 +6,10 @@ import Darwin
 import Glibc
 #endif
 
-public enum SwiftLotusProcessManagerError: Error {
+public enum SwiftLotusProcessManagerError: Error, Equatable {
     case processExecutionUnsupported
+    case workersAlreadyRunning([WorkerProcessRecord])
+    case workerExitTimedOut([WorkerProcessRecord])
 }
 
 public struct ProcessStatusRow: Equatable, Sendable {
@@ -22,22 +24,40 @@ public final class SwiftLotusProcessManager: @unchecked Sendable {
     @discardableResult
     public func start(_ spec: WorkerProcessSpec) throws -> RuntimeState {
         let store = RuntimeStateStore(runtimeDirectory: spec.runtimeDirectory)
+        let existingState = try store.load()
+        let liveRecords = existingState.records.filter { POSIXSignal.isAlive($0.pid) }
+        guard liveRecords.isEmpty else {
+            throw SwiftLotusProcessManagerError.workersAlreadyRunning(liveRecords)
+        }
+
+        if !existingState.records.isEmpty {
+            try store.save(RuntimeState())
+            try store.clearStatuses()
+        }
+
         var records: [WorkerProcessRecord] = []
 
-        for index in 0..<spec.workerCount {
-            let pid = try spawnWorker(spec, index: index)
-            records.append(
-                WorkerProcessRecord(
-                    id: "\(spec.name)-\(index)",
-                    name: spec.name,
-                    pid: pid,
-                    workerIndex: index,
-                    startedAt: Date(),
-                    executable: spec.executable,
-                    arguments: spec.arguments,
-                    reloadable: spec.reloadable
+        do {
+            for index in 0..<spec.workerCount {
+                let pid = try spawnWorker(spec, index: index)
+                records.append(
+                    WorkerProcessRecord(
+                        id: "\(spec.name)-\(index)",
+                        name: spec.name,
+                        pid: pid,
+                        workerIndex: index,
+                        startedAt: Date(),
+                        executable: spec.executable,
+                        arguments: spec.arguments,
+                        reloadable: spec.reloadable
+                    )
                 )
-            )
+            }
+        } catch {
+            terminate(records, timeout: 1.0)
+            try? store.save(RuntimeState())
+            try? store.clearStatuses()
+            throw error
         }
 
         let state = RuntimeState(records: records)
@@ -45,13 +65,15 @@ public final class SwiftLotusProcessManager: @unchecked Sendable {
         return state
     }
 
-    public func stop(runtimeDirectory: URL) throws {
+    public func stop(runtimeDirectory: URL, timeout: TimeInterval = 5.0) throws {
         let store = RuntimeStateStore(runtimeDirectory: runtimeDirectory)
         let state = try store.load()
-        for record in state.records {
-            POSIXSignal.send(.terminate, to: record.pid)
+        let remaining = terminate(state.records, timeout: timeout)
+        if !remaining.isEmpty {
+            throw SwiftLotusProcessManagerError.workerExitTimedOut(remaining)
         }
         try store.save(RuntimeState())
+        try store.clearStatuses()
     }
 
     @discardableResult
@@ -113,11 +135,40 @@ public final class SwiftLotusProcessManager: @unchecked Sendable {
         throw SwiftLotusProcessManagerError.processExecutionUnsupported
         #endif
     }
+
+    @discardableResult
+    private func terminate(_ records: [WorkerProcessRecord], timeout: TimeInterval) -> [WorkerProcessRecord] {
+        var liveRecords = records.filter { POSIXSignal.isAlive($0.pid) }
+        for record in liveRecords {
+            POSIXSignal.send(.terminate, to: record.pid)
+        }
+
+        liveRecords = waitForExit(liveRecords, timeout: timeout)
+        guard !liveRecords.isEmpty else {
+            return []
+        }
+
+        for record in liveRecords {
+            POSIXSignal.send(.forceKill, to: record.pid)
+        }
+        return waitForExit(liveRecords, timeout: 1.0)
+    }
+
+    private func waitForExit(_ records: [WorkerProcessRecord], timeout: TimeInterval) -> [WorkerProcessRecord] {
+        var liveRecords = records.filter { POSIXSignal.isAlive($0.pid) }
+        let deadline = Date().addingTimeInterval(max(0, timeout))
+        while !liveRecords.isEmpty && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.05)
+            liveRecords = liveRecords.filter { POSIXSignal.isAlive($0.pid) }
+        }
+        return liveRecords
+    }
 }
 
 public enum POSIXSignal {
     case terminate
     case userReload
+    case forceKill
 
     var rawValue: Int32 {
         switch self {
@@ -125,18 +176,26 @@ public enum POSIXSignal {
             return SIGTERM
         case .userReload:
             return SIGUSR1
+        case .forceKill:
+            return SIGKILL
         }
     }
 
-    public static func send(_ signal: POSIXSignal, to pid: Int32) {
+    @discardableResult
+    public static func send(_ signal: POSIXSignal, to pid: Int32) -> Bool {
         #if os(macOS) || os(Linux)
-        kill(pid, signal.rawValue)
+        return kill(pid, signal.rawValue) == 0
+        #else
+        return false
         #endif
     }
 
     public static func isAlive(_ pid: Int32) -> Bool {
         #if os(macOS) || os(Linux)
-        return kill(pid, 0) == 0
+        if kill(pid, 0) == 0 {
+            return true
+        }
+        return errno == EPERM
         #else
         return false
         #endif
