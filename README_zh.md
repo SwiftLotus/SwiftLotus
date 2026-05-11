@@ -45,13 +45,13 @@
 - UDP 和 Unix Socket：支持 `SwiftLotusUDP` datagram 服务，以及 `unix:///path.sock` stream 监听
 - 连接治理：支持最大连接数、单 IP 连接数限制和认证超时
 - `AsyncTcpConnection` 支持当前连接句柄和固定间隔自动重连策略
-- v1 生态组件：内置出站 HTTP/HTTPS 客户端、进程内 EventBus、日程调度器和轻量 metrics 收集器
+- 生态组件：内置出站 HTTP/HTTPS 客户端、进程内 EventBus、日程调度器和轻量 metrics 收集器
 - 可选数据库 add-on：Redis、MySQL、Postgres
 - NIO EventLoop 定时器封装
 
 ### 长连接服务能力边界
 
-SwiftLotus 现在已经覆盖长连接服务常见的基础构件：生命周期回调、连接追踪、uid/group 路由、空闲连接清理、发送背压、定时器和日程调度、自定义协议、异步 TCP 出站连接、出站 HTTP 客户端、进程内发布订阅、基础 metrics、UDP 监听、Unix Domain Socket、CLI 进程管理、reload 信号，以及面向分布式网关的 register 路由表。当前运行时管理器是 v1：它负责启动和发送信号给已编译的 Swift 可执行文件；更复杂的守护、自动拉起和完整分布式网关投递平面可以在这套基础上继续扩展。
+SwiftLotus 现在已经覆盖长连接服务常见的基础构件：生命周期回调、连接追踪、uid/group 路由、空闲连接清理、发送背压、定时器和日程调度、自定义协议、异步 TCP 出站连接、出站 HTTP 客户端、进程内发布订阅、基础 metrics、UDP 监听、Unix Domain Socket、CLI 进程管理、reload 信号，以及面向分布式网关的 register 路由表。运行时管理器负责启动和发送信号给已编译的 Swift 可执行文件；更复杂的守护、自动拉起和完整分布式网关投递平面可以在这套基础上继续扩展。
 
 ## 性能基准
 
@@ -271,7 +271,7 @@ struct App {
 }
 ```
 
-### 9. v1 生态组件
+### 9. 生态组件
 
 这些组件用于补齐长连接服务常见的外围能力，同时不把核心包做成厚重的应用框架。
 
@@ -306,7 +306,7 @@ SwiftLotusTimer.del(timer)
 - **ConnectionRegistry**：按连接 id、uid、group 追踪在线连接，服务于 uid/group 长连接应用。
 - **RuntimeStateStore / SwiftLotusProcessManager**：管理 worker 元数据、状态文件、CLI 进程生命周期和 reload 信号。
 - **GatewayRouteTable**：维护分布式 uid/group 路由索引，用于 register 风格网关部署。
-- **SwiftLotusHTTPClient / SwiftLotusEventBus / SwiftLotusScheduler / SwiftLotusMetrics**：v1 生态组件，分别用于出站调用、本地发布订阅、定时任务和进程内观测。
+- **SwiftLotusHTTPClient / SwiftLotusEventBus / SwiftLotusScheduler / SwiftLotusMetrics**：生态组件，分别用于出站调用、本地发布订阅、定时任务和进程内观测。
 
 ## License
 

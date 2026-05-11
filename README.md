@@ -50,7 +50,7 @@ SwiftLotus provides a small, protocol-oriented TCP layer over SwiftNIO:
 
 ### Long-Running Service Scope
 
-SwiftLotus now covers the core building blocks for long-running TCP services in a SwiftNIO shape: lifecycle callbacks, connection tracking, uid/group routing, idle cleanup, send backpressure, timers and schedules, custom protocols, async outbound TCP clients, an outbound HTTP client, in-process pub/sub, basic metrics, UDP listeners, Unix domain sockets, a CLI process manager, reload signals, and register-table primitives for distributed gateway routing. The runtime manager is intentionally a v1: it starts and signals compiled Swift executables, while advanced supervision policies and a full distributed gateway delivery plane can be layered on top.
+SwiftLotus now covers the core building blocks for long-running TCP services in a SwiftNIO shape: lifecycle callbacks, connection tracking, uid/group routing, idle cleanup, send backpressure, timers and schedules, custom protocols, async outbound TCP clients, an outbound HTTP client, in-process pub/sub, basic metrics, UDP listeners, Unix domain sockets, a CLI process manager, reload signals, and register-table primitives for distributed gateway routing. The runtime manager starts and signals compiled Swift executables, while advanced supervision policies and a full distributed gateway delivery plane can be layered on top.
 
 ## ⚡️ Performance Benchmarks
 The local benchmark suites under `Benchmarks/TCP` and `Benchmarks/HTTP` compare minimal SwiftLotus servers with minimal raw SwiftNIO servers on the same machine. These are regression benchmarks for framework overhead, not industry rankings.
@@ -306,7 +306,7 @@ SwiftLotusTimer.del(timer)
 *   **ConnectionRegistry**: Tracks live connections by id, uid, and group for uid/group-oriented long-lived services.
 *   **RuntimeStateStore / SwiftLotusProcessManager**: Manage worker metadata, status files, CLI process lifecycle, and reload signals.
 *   **GatewayRouteTable**: Maintains distributed uid/group route indexes for register-style gateway deployments.
-*   **SwiftLotusHTTPClient / SwiftLotusEventBus / SwiftLotusScheduler / SwiftLotusMetrics**: Small v1 ecosystem components for outbound calls, local pub/sub, scheduled tasks, and process-local observability.
+*   **SwiftLotusHTTPClient / SwiftLotusEventBus / SwiftLotusScheduler / SwiftLotusMetrics**: Small ecosystem components for outbound calls, local pub/sub, scheduled tasks, and process-local observability.
 
 ## 📄 License
 
