@@ -159,6 +159,21 @@ final class LotusWebSocketHandler: ChannelInboundHandler, @unchecked Sendable {
         fragmentedData = nil
         fragmentedBytes = 0
     }
+
+    func channelWritabilityChanged(context: ChannelHandlerContext) {
+        if let conn = connection {
+            worker._handleWritabilityChanged(conn)
+        }
+        context.fireChannelWritabilityChanged()
+    }
+
+    func userInboundEventTriggered(context: ChannelHandlerContext, event: Any) {
+        if let conn = connection {
+            worker._handleIdleEvent(event, connection: conn, context: context)
+        } else {
+            context.fireUserInboundEventTriggered(event)
+        }
+    }
     
     func channelInactive(context: ChannelHandlerContext) {
         guard let conn = self.connection else { return }
@@ -169,6 +184,11 @@ final class LotusWebSocketHandler: ChannelInboundHandler, @unchecked Sendable {
             Task { await onClose(conn) }
         }
         self.connection = nil
+    }
+
+    func errorCaught(context: ChannelHandlerContext, error: Error) {
+        worker._handleError(error, connection: connection)
+        context.close(promise: nil)
     }
 }
 

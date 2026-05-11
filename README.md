@@ -25,8 +25,9 @@ Built directly on top of Apple's **SwiftNIO** and Swift 6 **Structured Concurren
 
 SwiftLotus provides a small, protocol-oriented TCP layer over SwiftNIO:
 - **Low Overhead**: Protocol framing is pluggable, so applications can keep parsing and encoding close to the wire format they actually need.
-- **Long-Lived Connections by Design**: Managing persistent TCP connections is built-in. Broadcasts and connection tracking can work directly with `worker.connections`.
+- **Long-Lived Connections by Design**: Managing persistent TCP connections is built-in. Broadcasts and connection tracking can work through `worker.connections` or the uid/group registry.
 - **Async by Default, Fast Path When Needed**: Use async callbacks for normal application logic, or `onMessageSync` for tiny non-blocking handlers that should stay on the channel event loop.
+- **Backpressure and Heartbeats**: Configure write-buffer watermarks, pause/resume reads, and close idle connections with NIO-backed idle events.
 - **HTTP as a Built-In Protocol, Not the Core**: HTTP and WebSocket are included, but the framework is designed around TCP connection lifecycle and protocol framing.
 - **On-Demand Ecosystem**: Bring your own database. Redis, MySQL, and Postgres adapters live in separate add-on packages, so the root package stays core-only.
 
@@ -35,8 +36,16 @@ SwiftLotus provides a small, protocol-oriented TCP layer over SwiftNIO:
 - **Concurrency Safe**: Fully audited with `NIOLock` and `@Sendable` to guarantee thread-safety in Swift 6.
 - **OOM Protection**: Built-in generic payload size limiters (Memory Shields).
 - **Built-in Protocols**: TCP, HTTP/1.1, WebSocket, Text (Newline), and Frame (Length-prefixed binary).
+- **Connection Registry**: Bind connections to user ids, join groups, send to users, send to groups, and broadcast from one worker.
+- **Runtime Lifecycle Hooks**: `onWorkerStart`, `onWorkerStop`, `onError`, `onIdle`, `onBufferFull`, and `onBufferDrain`.
+- **Runtime Status Snapshot**: Inspect worker name, URI, thread count, running state, start time, and live connection count.
+- **Async TCP Client Reconnects**: `AsyncTcpConnection` can expose its current connection and use fixed-delay reconnect policies.
 - **Modular DB Access**: Optional add-on packages for `RediStack`, `MySQLNIO`, and `PostgresNIO`.
 - **EventLoop Timers**: Native NIO-backed timers for recurring jobs.
+
+### Workerman-Inspired Scope
+
+SwiftLotus now covers the core single-process TCP service pieces that are most important for Workerman-style long-lived applications: lifecycle callbacks, connection tracking, uid/group routing, idle cleanup, send backpressure, timers, custom protocols, and async outbound TCP clients. It does not yet implement Workerman's master/worker process manager, CLI `status/reload` commands, UDP/Unix socket listeners, or GatewayWorker-style distributed connection routing.
 
 ## ⚡️ Performance Benchmarks
 The local benchmark suites under `Benchmarks/TCP` and `Benchmarks/HTTP` compare minimal SwiftLotus servers with minimal raw SwiftNIO servers on the same machine. These are regression benchmarks for framework overhead, not industry rankings.
@@ -98,27 +107,40 @@ targets: [
 
 ## ⏱ Quick Start
 
-### 1. TCP Chat Server with Broadcast
-Easily build an IM backend using the built-in Connection Pool.
+### 1. TCP Chat Server with Groups
+Easily build an IM backend using the built-in connection registry.
 
 ```swift
+import NIOCore
 import SwiftLotus
 
 @main
 struct App {
     static func main() async throws {
-        // Listen on port 2346 using Text (newline-separated) protocol
         let worker = SwiftLotus<TextProtocol>(name: "ChatServer", uri: "tcp://0.0.0.0:2346")
+        worker.idleTimeout = .seconds(60)
+        worker.closeIdleConnections = true
+        worker.writeBufferWaterMark = .init(low: 1 * 1024 * 1024, high: 2 * 1024 * 1024)
         
         worker.onConnect = { connection in
             print("User connected: \(connection.id)")
         }
+
+        worker.onBufferFull = { connection in
+            connection.pauseRead()
+        }
+
+        worker.onBufferDrain = { connection in
+            connection.resumeRead()
+        }
         
         worker.onMessage = { connection, message in
-            // Broadcast to all connected users instantly
-            for sibling in worker.connections.values {
-                try? await sibling.send("User \(connection.id) says: \(message)")
+            if message.hasPrefix("/uid ") {
+                worker.bind(connection, uid: String(message.dropFirst(5)))
+                return
             }
+            worker.join(connection, group: "lobby")
+            try? await worker.sendToGroup("lobby", "User \(connection.id) says: \(message)")
         }
         
         try await worker.run()
@@ -153,7 +175,29 @@ worker.onMessageSync = { connection, request in
 }
 ```
 
-### 3. Native Database Connectivity (Redis Example)
+### 3. Async TCP Client with Reconnects
+
+```swift
+import NIOCore
+import SwiftLotus
+
+let client = AsyncTcpConnection<TextProtocol>(
+    uri: "tcp://127.0.0.1:9000",
+    reconnectPolicy: .fixedDelay(maxAttempts: nil, delay: .seconds(1))
+)
+
+client.onConnect = { connection in
+    try? await connection.send("hello")
+}
+
+client.onMessage = { _, message in
+    print("upstream:", message)
+}
+
+client.connect()
+```
+
+### 4. Native Database Connectivity (Redis Example)
 Use the Redis add-on when your application needs shared Redis access alongside SwiftLotus networking.
 
 ```swift
@@ -180,7 +224,7 @@ struct App {
 }
 ```
 
-### 4. Precision EventLoop Timers
+### 5. Precision EventLoop Timers
 ```swift
 // Executes on an EventLoop-backed timer.
 let timer = SwiftLotusTimer.add(timeInterval: 1.0) {
@@ -191,9 +235,10 @@ let timer = SwiftLotusTimer.add(timeInterval: 1.0) {
 ```
 
 ## 🏗 Architecture
-*   **SwiftLotus**: The main worker class managing the event loop, socket binding, and automatic connection pooling.
+*   **SwiftLotus**: The main worker class managing the event loop, socket binding, lifecycle callbacks, and runtime status.
 *   **ProtocolInterface**: Defines how raw `ByteBuffer`s are framed, encoded, and decoded. Unopinionated.
-*   **Connection**: Represents a client connection, generic over the protocol. Thread-safe.
+*   **Connection**: Represents a client connection, generic over the protocol, with async send, future fast paths, and read backpressure controls.
+*   **ConnectionRegistry**: Tracks live connections by id, uid, and group for Workerman-style long-lived services.
 
 ## 📄 License
 

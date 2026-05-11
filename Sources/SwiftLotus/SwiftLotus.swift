@@ -19,6 +19,15 @@ public final class SwiftLotus<P: ProtocolInterface>: @unchecked Sendable {
     /// SSL Context for enabling TLS/SSL
     public var sslContext: NIOSSLContext?
     public var enableSignalHandlers: Bool
+
+    /// Adds an NIO idle handler when set. The event is delivered to `onIdle`.
+    public var idleTimeout: TimeAmount?
+
+    /// Close a connection automatically after an idle event.
+    public var closeIdleConnections: Bool = false
+
+    /// Optional write-buffer watermarks for backpressure.
+    public var writeBufferWaterMark: ChannelOptions.Types.WriteBufferWaterMark?
     
     // MARK: - Callbacks
     
@@ -48,12 +57,51 @@ public final class SwiftLotus<P: ProtocolInterface>: @unchecked Sendable {
         get { lock.withLock { _onClose } }
         set { lock.withLock { _onClose = newValue } }
     }
+
+    private var _onError: (@Sendable (Connection<P>?, Error) async -> Void)?
+    public var onError: (@Sendable (Connection<P>?, Error) async -> Void)? {
+        get { lock.withLock { _onError } }
+        set { lock.withLock { _onError = newValue } }
+    }
+
+    private var _onBufferFull: (@Sendable (Connection<P>) async -> Void)?
+    public var onBufferFull: (@Sendable (Connection<P>) async -> Void)? {
+        get { lock.withLock { _onBufferFull } }
+        set { lock.withLock { _onBufferFull = newValue } }
+    }
+
+    private var _onBufferDrain: (@Sendable (Connection<P>) async -> Void)?
+    public var onBufferDrain: (@Sendable (Connection<P>) async -> Void)? {
+        get { lock.withLock { _onBufferDrain } }
+        set { lock.withLock { _onBufferDrain = newValue } }
+    }
+
+    private var _onIdle: (@Sendable (Connection<P>, SwiftLotusIdleEvent) async -> Void)?
+    public var onIdle: (@Sendable (Connection<P>, SwiftLotusIdleEvent) async -> Void)? {
+        get { lock.withLock { _onIdle } }
+        set { lock.withLock { _onIdle = newValue } }
+    }
+
+    private var _onWorkerStart: (@Sendable (SwiftLotus<P>) async -> Void)?
+    public var onWorkerStart: (@Sendable (SwiftLotus<P>) async -> Void)? {
+        get { lock.withLock { _onWorkerStart } }
+        set { lock.withLock { _onWorkerStart = newValue } }
+    }
+
+    private var _onWorkerStop: (@Sendable (SwiftLotus<P>) async -> Void)?
+    public var onWorkerStop: (@Sendable (SwiftLotus<P>) async -> Void)? {
+        get { lock.withLock { _onWorkerStop } }
+        set { lock.withLock { _onWorkerStop = newValue } }
+    }
     
     // MARK: - Internals
     
     // Protect connections dictionary
     private let connectionsLock = NIOLock()
     private var _connections: [UUID: Connection<P>] = [:]
+
+    /// User/group oriented connection registry for long-lived services.
+    public let registry = ConnectionRegistry<P>()
     
     /// Global array of active connections to this worker
     public var connections: [UUID: Connection<P>] {
@@ -62,10 +110,12 @@ public final class SwiftLotus<P: ProtocolInterface>: @unchecked Sendable {
     
     internal func _addConnection(_ conn: Connection<P>) {
         connectionsLock.withLock { _connections[conn.id] = conn }
+        registry.add(conn)
     }
     
     internal func _removeConnection(_ conn: Connection<P>) {
         let _ = connectionsLock.withLock { _connections.removeValue(forKey: conn.id) }
+        registry.remove(conn)
     }
     
     private let group: MultiThreadedEventLoopGroup
@@ -78,6 +128,8 @@ public final class SwiftLotus<P: ProtocolInterface>: @unchecked Sendable {
     private let lifecycleLock = NIOLock()
     private var serverChannel: Channel?
     private var didShutdownGroup = false
+    private var isRunning = false
+    private var startedAt: Date?
     
     // MARK: - Initialization
     
@@ -116,42 +168,65 @@ public final class SwiftLotus<P: ProtocolInterface>: @unchecked Sendable {
             setupSignalHandler()
         }
         
-        let bootstrap = ServerBootstrap(group: group)
+        var bootstrap = ServerBootstrap(group: group)
             .serverChannelOption(ChannelOptions.backlog, value: 256)
             .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
             .childChannelInitializer { channel in
-                // Add SSL Handler if context exists
-                if let context = self.sslContext {
-                    do {
-                        let sslHandler = NIOSSLServerHandler(context: context)
-                        try channel.pipeline.syncOperations.addHandler(sslHandler)
-                    } catch {
-                        return channel.eventLoop.makeFailedFuture(error)
-                    }
-
-                    return channel.eventLoop.makeSucceededFuture(()).flatMap {
-                        P.addHandlers(pipeline: channel.pipeline, worker: self)
-                    }
-                }
-                
-                // Delegate to Protocol to configure pipeline
-                return P.addHandlers(pipeline: channel.pipeline, worker: self)
+                self.configureChildPipeline(channel)
             }
             .childChannelOption(ChannelOptions.socketOption(.so_keepalive), value: 1)
+
+        if let writeBufferWaterMark {
+            bootstrap = bootstrap.childChannelOption(ChannelOptions.writeBufferWaterMark, value: writeBufferWaterMark)
+        }
         
         do {
             let channel = try await bootstrap.bind(host: host, port: port).get()
             lifecycleLock.withLock {
                 serverChannel = channel
+                isRunning = true
+                startedAt = Date()
             }
             print("SwiftLotus [\(name)] started listening on \(uri)")
+            if let onWorkerStart {
+                Task { await onWorkerStart(self) }
+            }
 
             // Wait until the channel closes
             try await channel.closeFuture.get()
+            lifecycleLock.withLock {
+                isRunning = false
+            }
+            if let onWorkerStop {
+                Task { await onWorkerStop(self) }
+            }
             try await shutdownGroupOnce()
         } catch {
+            lifecycleLock.withLock {
+                isRunning = false
+            }
+            if let onError {
+                Task { await onError(nil, error) }
+            }
             try? await shutdownGroupOnce()
             throw error
+        }
+    }
+
+    private func configureChildPipeline(_ channel: Channel) -> EventLoopFuture<Void> {
+        do {
+            if let context = sslContext {
+                let sslHandler = NIOSSLServerHandler(context: context)
+                try channel.pipeline.syncOperations.addHandler(sslHandler)
+            }
+
+            if let idleTimeout {
+                try channel.pipeline.syncOperations.addHandler(IdleStateHandler(allTimeout: idleTimeout))
+            }
+
+            return P.addHandlers(pipeline: channel.pipeline, worker: self)
+        } catch {
+            return channel.eventLoop.makeFailedFuture(error)
         }
     }
 
@@ -159,6 +234,9 @@ public final class SwiftLotus<P: ProtocolInterface>: @unchecked Sendable {
         let channel = lifecycleLock.withLock { serverChannel }
         if let channel {
             try await channel.close().get()
+        }
+        lifecycleLock.withLock {
+            isRunning = false
         }
         try await shutdownGroupOnce()
     }
@@ -227,6 +305,90 @@ public final class SwiftLotus<P: ProtocolInterface>: @unchecked Sendable {
         }
     }
     #endif
+
+    public var status: SwiftLotusStatus {
+        lifecycleLock.withLock {
+            SwiftLotusStatus(
+                name: name,
+                uri: uri,
+                threadCount: count,
+                connectionCount: registry.connectionCount,
+                isRunning: isRunning,
+                startedAt: startedAt
+            )
+        }
+    }
+
+    public func bind(_ connection: Connection<P>, uid: String) {
+        registry.bind(connection, uid: uid)
+    }
+
+    public func unbind(_ connection: Connection<P>) {
+        registry.unbind(connection)
+    }
+
+    public func join(_ connection: Connection<P>, group: String) {
+        registry.join(connection, group: group)
+    }
+
+    public func leave(_ connection: Connection<P>, group: String) {
+        registry.leave(connection, group: group)
+    }
+
+    public func connections(forUid uid: String) -> [Connection<P>] {
+        registry.connections(forUid: uid)
+    }
+
+    public func connections(inGroup group: String) -> [Connection<P>] {
+        registry.connections(inGroup: group)
+    }
+
+    @discardableResult
+    public func sendToUid(_ uid: String, _ data: P.Response) async throws -> Int {
+        try await registry.send(toUid: uid, data)
+    }
+
+    @discardableResult
+    public func sendToGroup(_ group: String, _ data: P.Response) async throws -> Int {
+        try await registry.send(toGroup: group, data)
+    }
+
+    @discardableResult
+    public func broadcast(_ data: P.Response) async throws -> Int {
+        try await registry.broadcast(data)
+    }
+
+    internal func _handleWritabilityChanged(_ connection: Connection<P>) {
+        if connection.isWritable {
+            if let onBufferDrain {
+                Task { await onBufferDrain(connection) }
+            }
+        } else if let onBufferFull {
+            Task { await onBufferFull(connection) }
+        }
+    }
+
+    internal func _handleIdleEvent(_ event: Any, connection: Connection<P>, context: ChannelHandlerContext) {
+        guard let nioEvent = event as? IdleStateHandler.IdleStateEvent,
+              let idleEvent = SwiftLotusIdleEvent(nioEvent) else {
+            context.fireUserInboundEventTriggered(event)
+            return
+        }
+
+        if let onIdle {
+            Task { await onIdle(connection, idleEvent) }
+        }
+
+        if closeIdleConnections {
+            context.close(promise: nil)
+        }
+    }
+
+    internal func _handleError(_ error: Error, connection: Connection<P>?) {
+        if let onError {
+            Task { await onError(connection, error) }
+        }
+    }
 }
 
 // MARK: - Handlers
@@ -293,6 +455,21 @@ final class LotusHandler<P: ProtocolInterface>: ChannelInboundHandler, @unchecke
             Task { await onMessage(conn, message) }
         }
     }
+
+    func channelWritabilityChanged(context: ChannelHandlerContext) {
+        if let conn = connection {
+            worker._handleWritabilityChanged(conn)
+        }
+        context.fireChannelWritabilityChanged()
+    }
+
+    func userInboundEventTriggered(context: ChannelHandlerContext, event: Any) {
+        if let conn = connection {
+            worker._handleIdleEvent(event, connection: conn, context: context)
+        } else {
+            context.fireUserInboundEventTriggered(event)
+        }
+    }
     
     func channelInactive(context: ChannelHandlerContext) {
         guard let conn = self.connection else { return }
@@ -306,6 +483,7 @@ final class LotusHandler<P: ProtocolInterface>: ChannelInboundHandler, @unchecke
     }
     
     func errorCaught(context: ChannelHandlerContext, error: Error) {
+        worker._handleError(error, connection: connection)
         context.close(promise: nil)
     }
 }

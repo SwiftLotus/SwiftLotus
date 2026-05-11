@@ -15,6 +15,7 @@ public final class AsyncTcpConnection<P: ProtocolInterface>: @unchecked Sendable
     // MARK: - Configuration
     
     public let uri: String
+    public var reconnectPolicy: ReconnectPolicy
     
     // MARK: - Callbacks
     
@@ -47,15 +48,22 @@ public final class AsyncTcpConnection<P: ProtocolInterface>: @unchecked Sendable
     // MARK: - Internals
     
     private let group: EventLoopGroup
+    private var _connection: Connection<P>?
+    private var manuallyClosed = false
     private var host: String = ""
     private var port: Int = 0
     private var scheme: String = "tcp"
     private var sslContext: NIOSSLContext?
     private var configurationError: SwiftLotusError?
     
-    public init(uri: String, sslContext: NIOSSLContext? = nil) {
+    public var connection: Connection<P>? {
+        lock.withLock { _connection }
+    }
+
+    public init(uri: String, sslContext: NIOSSLContext? = nil, reconnectPolicy: ReconnectPolicy = .disabled) {
         self.uri = uri
         self.sslContext = sslContext
+        self.reconnectPolicy = reconnectPolicy
         self.group = GlobalEventLoop.sharedGroup
         parseUri(uri)
     }
@@ -73,7 +81,26 @@ public final class AsyncTcpConnection<P: ProtocolInterface>: @unchecked Sendable
     }
     
     public func connect() {
+        lock.withLock {
+            manuallyClosed = false
+        }
         Task {
+            await self.connectLoop()
+        }
+    }
+
+    public func close() {
+        let connection = lock.withLock { () -> Connection<P>? in
+            manuallyClosed = true
+            return _connection
+        }
+        connection?.closeFuture()
+    }
+
+    private func connectLoop() async {
+        var attempts = 0
+
+        while true {
             do {
                 try await self._connect()
             } catch {
@@ -81,6 +108,26 @@ public final class AsyncTcpConnection<P: ProtocolInterface>: @unchecked Sendable
                     await onError(error)
                 }
             }
+
+            attempts += 1
+            guard shouldReconnect(afterAttempt: attempts) else {
+                break
+            }
+
+            do {
+                try await group.next().scheduleTask(in: reconnectPolicy.delay) {}.futureResult.get()
+            } catch {
+                if let onError = self.onError {
+                    await onError(error)
+                }
+                break
+            }
+        }
+    }
+
+    private func shouldReconnect(afterAttempt attempt: Int) -> Bool {
+        lock.withLock {
+            !manuallyClosed && reconnectPolicy.shouldReconnect(afterFailedAttempt: attempt)
         }
     }
     
@@ -123,6 +170,12 @@ public final class AsyncTcpConnection<P: ProtocolInterface>: @unchecked Sendable
         try await channel.closeFuture.get()
     }
 
+    fileprivate func setConnection(_ connection: Connection<P>?) {
+        lock.withLock {
+            _connection = connection
+        }
+    }
+
     private func validateConfiguration() throws {
         if let configurationError {
             throw configurationError
@@ -156,6 +209,7 @@ final class LotusClientHandler<P: ProtocolInterface>: ChannelInboundHandler, @un
     func channelActive(context: ChannelHandlerContext) {
         let conn = Connection<P>(channel: context.channel)
         self.connection = conn
+        client.setConnection(conn)
         if let onConnect = client.onConnect {
             Task { await onConnect(conn) }
         }
@@ -175,6 +229,7 @@ final class LotusClientHandler<P: ProtocolInterface>: ChannelInboundHandler, @un
         if let onClose = client.onClose {
             Task { await onClose(conn) }
         }
+        client.setConnection(nil)
         self.connection = nil
     }
     
