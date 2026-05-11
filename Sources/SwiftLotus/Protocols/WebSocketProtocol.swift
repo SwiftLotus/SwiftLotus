@@ -9,7 +9,7 @@ public struct WebSocketFrameWrapper: Sendable {
     public let fin: Bool
     
     public var string: String {
-        return data.getString(at: 0, length: data.readableBytes) ?? ""
+        return data.getString(at: data.readerIndex, length: data.readableBytes) ?? ""
     }
 }
 

@@ -50,10 +50,16 @@ public struct SwiftLotusHTTPClientResponse: Sendable, Equatable {
 public final class SwiftLotusHTTPClient: @unchecked Sendable {
     private let group: EventLoopGroup
     private let sslContext: NIOSSLContext?
+    private let maxResponseBodyBytes: Int
 
-    public init(group: EventLoopGroup = GlobalEventLoop.sharedGroup, sslContext: NIOSSLContext? = nil) {
+    public init(
+        group: EventLoopGroup = GlobalEventLoop.sharedGroup,
+        sslContext: NIOSSLContext? = nil,
+        maxResponseBodyBytes: Int = 16 * 1024 * 1024
+    ) {
         self.group = group
         self.sslContext = sslContext
+        self.maxResponseBodyBytes = max(0, maxResponseBodyBytes)
     }
 
     public func get(_ url: String, headers: HTTPHeaders = HTTPHeaders()) async throws -> SwiftLotusHTTPClientResponse {
@@ -83,7 +89,13 @@ public final class SwiftLotusHTTPClient: @unchecked Sendable {
                 }
 
                 futures.append(channel.pipeline.addHTTPClientHandlers())
-                futures.append(channel.pipeline.addHandler(SwiftLotusHTTPClientHandler(request: request, promise: promise)))
+                futures.append(channel.pipeline.addHandler(
+                    SwiftLotusHTTPClientHandler(
+                        request: request,
+                        promise: promise,
+                        maxResponseBodyBytes: self.maxResponseBodyBytes
+                    )
+                ))
                 return EventLoopFuture.andAllSucceed(futures, on: channel.eventLoop)
             }
 
@@ -104,12 +116,19 @@ private final class SwiftLotusHTTPClientHandler: ChannelInboundHandler, @uncheck
 
     private let request: SwiftLotusHTTPRequest
     private let promise: EventLoopPromise<SwiftLotusHTTPClientResponse>
+    private let maxResponseBodyBytes: Int
     private var responseHead: HTTPResponseHead?
     private var body = ByteBuffer()
+    private var completed = false
 
-    init(request: SwiftLotusHTTPRequest, promise: EventLoopPromise<SwiftLotusHTTPClientResponse>) {
+    init(
+        request: SwiftLotusHTTPRequest,
+        promise: EventLoopPromise<SwiftLotusHTTPClientResponse>,
+        maxResponseBodyBytes: Int
+    ) {
         self.request = request
         self.promise = promise
+        self.maxResponseBodyBytes = maxResponseBodyBytes
     }
 
     func channelActive(context: ChannelHandlerContext) {
@@ -137,21 +156,42 @@ private final class SwiftLotusHTTPClientHandler: ChannelInboundHandler, @uncheck
         case .head(let head):
             responseHead = head
         case .body(var buffer):
+            if body.readableBytes + buffer.readableBytes > maxResponseBodyBytes {
+                finish(.failure(SwiftLotusError.payloadTooLarge(maximum: maxResponseBodyBytes)), context: context)
+                return
+            }
             body.writeBuffer(&buffer)
         case .end:
             guard let head = responseHead else {
-                promise.fail(SwiftLotusError.invalidURI("HTTP response ended without a head"))
-                context.close(promise: nil)
+                finish(.failure(SwiftLotusError.invalidURI("HTTP response ended without a head")), context: context)
                 return
             }
             let text = body.getString(at: body.readerIndex, length: body.readableBytes) ?? ""
-            promise.succeed(SwiftLotusHTTPClientResponse(status: head.status, headers: head.headers, body: text))
-            context.close(promise: nil)
+            finish(.success(SwiftLotusHTTPClientResponse(status: head.status, headers: head.headers, body: text)), context: context)
+        }
+    }
+
+    func channelInactive(context: ChannelHandlerContext) {
+        if !completed {
+            finish(.failure(ChannelError.ioOnClosedChannel), context: nil)
         }
     }
 
     func errorCaught(context: ChannelHandlerContext, error: Error) {
-        promise.fail(error)
-        context.close(promise: nil)
+        finish(.failure(error), context: context)
+    }
+
+    private func finish(_ result: Result<SwiftLotusHTTPClientResponse, Error>, context: ChannelHandlerContext?) {
+        guard !completed else { return }
+        completed = true
+
+        switch result {
+        case .success(let response):
+            promise.succeed(response)
+        case .failure(let error):
+            promise.fail(error)
+        }
+
+        context?.close(promise: nil)
     }
 }

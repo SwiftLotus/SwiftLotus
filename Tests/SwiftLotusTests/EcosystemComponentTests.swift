@@ -48,6 +48,73 @@ final class EcosystemComponentTests: XCTestCase {
         XCTAssertEqual(response.body, "ok:/health?ready=1|127.0.0.1:\(port)")
     }
 
+    func testHTTPClientFailsWhenConnectionClosesBeforeResponseCompletes() async throws {
+        let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+        let server = try await ServerBootstrap(group: group)
+            .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
+            .childChannelInitializer { channel in
+                channel.pipeline.addHandler(CloseOnActiveHandler())
+            }
+            .childChannelOption(ChannelOptions.allowRemoteHalfClosure, value: false)
+            .bind(host: "127.0.0.1", port: 0)
+            .get()
+
+        addTeardownBlock {
+            try? server.close().wait()
+            try? group.syncShutdownGracefully()
+        }
+
+        let port = try XCTUnwrap(server.localAddress?.port)
+        let client = SwiftLotusHTTPClient(group: group)
+
+        do {
+            _ = try await withTimeout(seconds: 0.5) {
+                try await client.get("http://127.0.0.1:\(port)/will-close")
+            }
+            XCTFail("Expected incomplete response to fail")
+        } catch TestTimeoutError.timedOut {
+            XCTFail("HTTP client request should complete when the channel closes")
+        } catch {
+            // Expected: the connection closed before a complete response arrived.
+        }
+    }
+
+    func testHTTPClientRejectsOversizedResponseBody() async throws {
+        let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+        let server = try await ServerBootstrap(group: group)
+            .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
+            .childChannelInitializer { channel in
+                do {
+                    try channel.pipeline.syncOperations.configureHTTPServerPipeline(
+                        withPipeliningAssistance: true,
+                        withServerUpgrade: nil,
+                        withErrorHandling: true
+                    )
+                    try channel.pipeline.syncOperations.addHandler(TestHTTPServerHandler(body: "too-large"))
+                    return channel.eventLoop.makeSucceededFuture(())
+                } catch {
+                    return channel.eventLoop.makeFailedFuture(error)
+                }
+            }
+            .bind(host: "127.0.0.1", port: 0)
+            .get()
+
+        addTeardownBlock {
+            try? server.close().wait()
+            try? group.syncShutdownGracefully()
+        }
+
+        let port = try XCTUnwrap(server.localAddress?.port)
+        let client = SwiftLotusHTTPClient(group: group, maxResponseBodyBytes: 3)
+
+        do {
+            _ = try await client.get("http://127.0.0.1:\(port)/large")
+            XCTFail("Expected oversized response body to fail")
+        } catch {
+            XCTAssertEqual(error as? SwiftLotusError, .payloadTooLarge(maximum: 3))
+        }
+    }
+
     func testEventBusPublishesAndUnsubscribes() async {
         let bus = SwiftLotusEventBus<String>()
         let recorder = MessageRecorder()
@@ -97,8 +164,13 @@ private final class TestHTTPServerHandler: ChannelInboundHandler, @unchecked Sen
     typealias InboundIn = HTTPServerRequestPart
     typealias OutboundOut = HTTPServerResponsePart
 
+    private let body: String?
     private var requestURI = "/"
     private var requestHost = ""
+
+    init(body: String? = nil) {
+        self.body = body
+    }
 
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
         switch unwrapInboundIn(data) {
@@ -109,7 +181,7 @@ private final class TestHTTPServerHandler: ChannelInboundHandler, @unchecked Sen
             break
         case .end:
             var buffer = context.channel.allocator.buffer(capacity: 0)
-            buffer.writeString("ok:\(requestURI)|\(requestHost)")
+            buffer.writeString(body ?? "ok:\(requestURI)|\(requestHost)")
 
             var headers = HTTPHeaders()
             headers.add(name: "Content-Length", value: "\(buffer.readableBytes)")
@@ -119,5 +191,36 @@ private final class TestHTTPServerHandler: ChannelInboundHandler, @unchecked Sen
             context.write(wrapOutboundOut(.body(.byteBuffer(buffer))), promise: nil)
             context.writeAndFlush(wrapOutboundOut(.end(nil)), promise: nil)
         }
+    }
+}
+
+private enum TestTimeoutError: Error {
+    case timedOut
+}
+
+private final class CloseOnActiveHandler: ChannelInboundHandler, @unchecked Sendable {
+    typealias InboundIn = ByteBuffer
+
+    func channelActive(context: ChannelHandlerContext) {
+        context.close(promise: nil)
+    }
+}
+
+private func withTimeout<T: Sendable>(
+    seconds: TimeInterval,
+    operation: @escaping @Sendable () async throws -> T
+) async throws -> T {
+    try await withThrowingTaskGroup(of: T.self) { group in
+        group.addTask {
+            try await operation()
+        }
+        group.addTask {
+            try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            throw TestTimeoutError.timedOut
+        }
+
+        let result = try await group.next()!
+        group.cancelAll()
+        return result
     }
 }

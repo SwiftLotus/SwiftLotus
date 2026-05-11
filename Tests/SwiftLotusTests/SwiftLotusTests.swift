@@ -146,6 +146,29 @@ final class SwiftLotusTests: XCTestCase {
         XCTAssertNoThrow(try channel.finish(acceptAlreadyClosed: true))
     }
 
+    func testHttpRequestBodyUsesReaderIndex() throws {
+        let worker = SwiftLotus<HttpProtocol>(name: "HTTPBodyReaderIndexTest", uri: "http://127.0.0.1:0", enableSignalHandlers: false)
+        let receivedBodies = MessageRecorder()
+
+        worker.onMessageSync = { _, request in
+            receivedBodies.append(request.body ?? "")
+        }
+
+        let channel = EmbeddedChannel(handler: LotusHttpHandler(worker: worker))
+        channel.pipeline.fireChannelActive()
+
+        let head = HTTPRequestHead(version: .http1_1, method: .POST, uri: "/")
+        var body = channel.allocator.buffer(string: "xxpayload")
+        body.moveReaderIndex(forwardBy: 2)
+
+        try channel.writeInbound(HTTPServerRequestPart.head(head))
+        try channel.writeInbound(HTTPServerRequestPart.body(body))
+        try channel.writeInbound(HTTPServerRequestPart.end(nil))
+
+        XCTAssertEqual(receivedBodies.messages, ["payload"])
+        XCTAssertNoThrow(try channel.finish(acceptAlreadyClosed: true))
+    }
+
     func testTLSSchemeRequiresSSLContext() async throws {
         let worker = SwiftLotus<TextProtocol>(uri: "ssl://256.256.256.256:1234", enableSignalHandlers: false)
 
@@ -199,6 +222,16 @@ final class SwiftLotusTests: XCTestCase {
 
         XCTAssertEqual(receivedMessages.messages, ["hello world"])
         XCTAssertNoThrow(try channel.finish(acceptAlreadyClosed: true))
+    }
+
+    func testWebSocketFrameStringUsesReaderIndex() {
+        let allocator = ByteBufferAllocator()
+        var buffer = allocator.buffer(string: "xxhello")
+        buffer.moveReaderIndex(forwardBy: 2)
+
+        let frame = WebSocketFrameWrapper(opcode: .text, data: buffer, fin: true)
+
+        XCTAssertEqual(frame.string, "hello")
     }
     
     // MARK: - Integration Test (Mock)

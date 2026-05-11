@@ -141,7 +141,7 @@ final class LotusHttpHandler: ChannelInboundHandler, @unchecked Sendable {
                 context.close(promise: nil)
                 return
             }
-            let string = buffer.getString(at: 0, length: buffer.readableBytes) ?? ""
+            let string = buffer.getString(at: buffer.readerIndex, length: buffer.readableBytes) ?? ""
             self.requestBody?.append(string)
             
         case .end(_):

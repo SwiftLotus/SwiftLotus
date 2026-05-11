@@ -17,7 +17,7 @@
     </a>
 </p>
 
-**SwiftLotus** 是一个基于 SwiftNIO 的轻量级异步 TCP 网络服务框架。它的定位更接近 Workerman，而不是传统 HTTP MVC 框架：进程常驻、事件驱动、面向连接生命周期，并允许你在同一套核心之上构建 TCP 服务、自定义协议、WebSocket 网关、代理服务、游戏网关、IoT 网关和 HTTP 接口。
+**SwiftLotus** 是一个基于 SwiftNIO 的轻量级异步 TCP 网络服务框架。它面向进程常驻、事件驱动和连接生命周期管理，不是传统 HTTP MVC 框架；你可以在同一套核心之上构建 TCP 服务、自定义协议、WebSocket 网关、代理服务、游戏网关、IoT 网关和 HTTP 接口。
 
 项目提供 Swift 6 `async/await` 风格的易用 API，同时保留 SwiftNIO 的 EventLoop 模型。对于极短的热点路径，也提供同步 EventLoop 快路径，减少不必要的任务调度开销。
 
@@ -49,9 +49,9 @@
 - 可选数据库 add-on：Redis、MySQL、Postgres
 - NIO EventLoop 定时器封装
 
-### 与 Workerman 的能力边界
+### 长连接服务能力边界
 
-SwiftLotus 现在已经覆盖大部分 Workerman 风格基础构件：生命周期回调、连接追踪、uid/group 路由、空闲连接清理、发送背压、定时器和日程调度、自定义协议、异步 TCP 出站连接、出站 HTTP 客户端、进程内发布订阅、基础 metrics、UDP 监听、Unix Domain Socket、CLI 进程管理、reload 信号，以及面向分布式网关的 register 路由表。当前运行时管理器是 v1：它负责启动和发送信号给已编译的 Swift 可执行文件；更复杂的守护、自动拉起和完整 GatewayWorker 投递平面可以在这套基础上继续扩展。
+SwiftLotus 现在已经覆盖长连接服务常见的基础构件：生命周期回调、连接追踪、uid/group 路由、空闲连接清理、发送背压、定时器和日程调度、自定义协议、异步 TCP 出站连接、出站 HTTP 客户端、进程内发布订阅、基础 metrics、UDP 监听、Unix Domain Socket、CLI 进程管理、reload 信号，以及面向分布式网关的 register 路由表。当前运行时管理器是 v1：它负责启动和发送信号给已编译的 Swift 可执行文件；更复杂的守护、自动拉起和完整分布式网关投递平面可以在这套基础上继续扩展。
 
 ## 性能基准
 
@@ -303,7 +303,7 @@ SwiftLotusTimer.del(timer)
 - **SwiftLotus**：管理 EventLoop、监听 socket、连接生命周期、事件回调和运行状态。
 - **ProtocolInterface**：定义原始 `ByteBuffer` 如何分包、解码和编码。
 - **Connection**：表示一个客户端连接，按协议泛型化，提供 async 发送、future 快路径和读背压控制。
-- **ConnectionRegistry**：按连接 id、uid、group 追踪在线连接，服务于 Workerman 风格长连接应用。
+- **ConnectionRegistry**：按连接 id、uid、group 追踪在线连接，服务于 uid/group 长连接应用。
 - **RuntimeStateStore / SwiftLotusProcessManager**：管理 worker 元数据、状态文件、CLI 进程生命周期和 reload 信号。
 - **GatewayRouteTable**：维护分布式 uid/group 路由索引，用于 register 风格网关部署。
 - **SwiftLotusHTTPClient / SwiftLotusEventBus / SwiftLotusScheduler / SwiftLotusMetrics**：v1 生态组件，分别用于出站调用、本地发布订阅、定时任务和进程内观测。
