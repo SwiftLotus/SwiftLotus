@@ -17,25 +17,25 @@
     </a>
 </p>
 
-**SwiftLotus** is an open-source, ultra high-performance, asynchronous non-blocking underlying Socket engine for Swift. It is not just an HTTP web framework, but a highly generic and foundational network service engine. You can use it to easily develop massive-concurrency TCP proxies, distributed multiplayer game server backends, custom IoT communication gateways, and any network service cluster requiring extreme throughput and real-time bidirectional interaction.
+**SwiftLotus** is an open-source asynchronous networking framework for Swift, built for HTTP, WebSocket, long-lived TCP services, proxies, game gateways, IoT gateways, and custom protocol servers.
 
-Built directly on top of Apple's **SwiftNIO** and leveraging Swift 6 **Structured Concurrency (`async/await`)**, it provides bare-metal Socket throughput while maintaining a beautifully simple API.
+Built directly on top of Apple's **SwiftNIO** and Swift 6 **Structured Concurrency (`async/await`)**, it keeps the API approachable while still exposing event-loop oriented fast paths for latency-sensitive handlers.
 
 ## 🚀 Why SwiftLotus?
 
-SwiftLotus provides a lightweight, elegant, and bare-metal approach to backend network development:
-- **Zero Overhead**: Exposes raw TCP/UDP streams natively. Pluggable protocols with absolute minimum runtime padding.
-- **Stateful by Design**: Managing persistent connections is built-in. Want to broadcast a message to 10,000 connected players? Just loop over `worker.connections`.
-- **True Shared-Threading**: Shares a single ultra-fast `GlobalEventLoop` (epoll/kqueue) across your entire app infrastructure, drastically eliminating threading context switch taxes.
-- **On-Demand Ecosystem**: Bring your own database. We provide modular wrappers for Redis, MySQL, and Postgres without forcing you to download them if you don't need them.
+SwiftLotus provides a small, protocol-oriented layer over SwiftNIO:
+- **Low Overhead**: Protocol framing is pluggable, so applications can keep parsing and encoding close to the wire format they actually need.
+- **Stateful by Design**: Managing persistent connections is built-in. Broadcasts and connection tracking can work directly with `worker.connections`.
+- **Async by Default, Fast Path When Needed**: Use async callbacks for normal application logic, or `onMessageSync` for tiny non-blocking handlers that should stay on the channel event loop.
+- **On-Demand Ecosystem**: Bring your own database. Redis, MySQL, and Postgres adapters live in separate add-on packages, so the root package stays core-only.
 
 ## 📦 Features
-- **Uncompromising Performance**: Built on SwiftNIO (Zero Context Switch design).
+- **Performance-Oriented Core**: Built on SwiftNIO with explicit event-loop fast paths for hot handlers.
 - **Concurrency Safe**: Fully audited with `NIOLock` and `@Sendable` to guarantee thread-safety in Swift 6.
 - **OOM Protection**: Built-in generic payload size limiters (Memory Shields).
 - **Built-in Protocols**: TCP, HTTP/1.1, WebSocket, Text (Newline), and Frame (Length-prefixed binary).
-- **Modular DB Access**: Direct integration targets for `RediStack`, `MySQLNIO`, and `PostgresNIO`.
-- **High-Precision Timers**: Native NIO-backed event-loop timers (bypassing unstructured `Task.sleep` overhead).
+- **Modular DB Access**: Optional add-on packages for `RediStack`, `MySQLNIO`, and `PostgresNIO`.
+- **EventLoop Timers**: Native NIO-backed timers for recurring jobs.
 
 ## ⚡️ Performance Benchmark
 The local benchmark suite under `Benchmarks/HTTP` compares a minimal `SwiftLotus<HttpProtocol>` server with a minimal raw SwiftNIO HTTP server on the same machine. This is a regression benchmark for framework overhead, not an industry ranking.
@@ -153,22 +153,22 @@ worker.onMessageSync = { connection, request in
 ```
 
 ### 3. Native Database Connectivity (Redis Example)
-Integrate external DB calls seamlessly onto the exact same C-level network threads (Zero Context Switching).
+Use the Redis add-on when your application needs shared Redis access alongside SwiftLotus networking.
 
 ```swift
 import SwiftLotus
 import SwiftLotusRedis
+import RediStack
 
 @main
 struct App {
     static func main() async throws {
-        // Setup Redis Pool on the shared EventLoop
+        // Set up the shared Redis pool.
         try SwiftLotusRedis.setup(hostname: "127.0.0.1", port: 6379)
         
         let worker = SwiftLotus<HttpProtocol>(name: "API", uri: "http://0.0.0.0:8080")
         
         worker.onMessage = { connection, request in
-            // Async DB fetch without blocking any threads!
             let count = try await SwiftLotusRedis.pool.increment(RedisKey("views")).get()
             
             try await connection.send(HttpResponse(body: "Views: \(count)"))
@@ -181,7 +181,7 @@ struct App {
 
 ### 4. Precision EventLoop Timers
 ```swift
-// Executes directly on the global EventLoop (Extreme precision, zero Task.sleep spawning overhead)
+// Executes on an EventLoop-backed timer.
 let timer = SwiftLotusTimer.add(timeInterval: 1.0) {
     print("Running every second...")
 }
