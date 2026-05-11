@@ -44,12 +44,13 @@ SwiftLotus provides a small, protocol-oriented TCP layer over SwiftNIO:
 - **UDP and Unix Socket Support**: Run datagram services with `SwiftLotusUDP` and bind stream workers with `unix:///path.sock`.
 - **Connection Governance**: Configure max connections, per-IP limits, and authentication timeouts.
 - **Async TCP Client Reconnects**: `AsyncTcpConnection` can expose its current connection and use fixed-delay reconnect policies.
+- **Ecosystem Components**: Built-in outbound HTTP/HTTPS client, in-process event bus, calendar-aware scheduler, and lightweight metrics collector.
 - **Modular DB Access**: Optional add-on packages for `RediStack`, `MySQLNIO`, and `PostgresNIO`.
 - **EventLoop Timers**: Native NIO-backed timers for recurring jobs.
 
 ### Workerman-Inspired Scope
 
-SwiftLotus now covers most of the Workerman-style building blocks in a SwiftNIO shape: lifecycle callbacks, connection tracking, uid/group routing, idle cleanup, send backpressure, timers, custom protocols, async outbound TCP clients, UDP listeners, Unix domain sockets, a CLI process manager, reload signals, and register-table primitives for distributed gateway routing. The runtime manager is intentionally a v1: it starts and signals compiled Swift executables, while advanced supervision policies and a full GatewayWorker-compatible delivery plane can be layered on top.
+SwiftLotus now covers most of the Workerman-style building blocks in a SwiftNIO shape: lifecycle callbacks, connection tracking, uid/group routing, idle cleanup, send backpressure, timers and schedules, custom protocols, async outbound TCP clients, an outbound HTTP client, in-process pub/sub, basic metrics, UDP listeners, Unix domain sockets, a CLI process manager, reload signals, and register-table primitives for distributed gateway routing. The runtime manager is intentionally a v1: it starts and signals compiled Swift executables, while advanced supervision policies and a full GatewayWorker-compatible delivery plane can be layered on top.
 
 ## ⚡️ Performance Benchmarks
 The local benchmark suites under `Benchmarks/TCP` and `Benchmarks/HTTP` compare minimal SwiftLotus servers with minimal raw SwiftNIO servers on the same machine. These are regression benchmarks for framework overhead, not industry rankings.
@@ -272,14 +273,30 @@ struct App {
 }
 ```
 
-### 8. Precision EventLoop Timers
+### 8. Ecosystem Components
+Use the built-in utility components for common long-running service needs without turning the core package into a full application framework.
+
 ```swift
-// Executes on an EventLoop-backed timer.
-let timer = SwiftLotusTimer.add(timeInterval: 1.0) {
-    print("Running every second...")
+let http = SwiftLotusHTTPClient()
+let response = try await http.get("http://127.0.0.1:8080/health")
+print(response.status, response.body)
+
+let bus = SwiftLotusEventBus<String>()
+bus.subscribe("jobs.created") { jobId in
+    print("job created:", jobId)
+}
+await bus.publish("jobs.created", "42")
+
+let metrics = SwiftLotusMetrics()
+metrics.incrementCounter("messages")
+metrics.setGauge("connections", value: 12)
+
+let timer = SwiftLotusScheduler.add(.every(seconds: 5)) {
+    metrics.recordDuration("heartbeat", seconds: 0.001)
 }
 
-// SwiftLotusTimer.del(timer)
+let snapshot = metrics.snapshot()
+SwiftLotusTimer.del(timer)
 ```
 
 ## 🏗 Architecture
@@ -289,6 +306,7 @@ let timer = SwiftLotusTimer.add(timeInterval: 1.0) {
 *   **ConnectionRegistry**: Tracks live connections by id, uid, and group for Workerman-style long-lived services.
 *   **RuntimeStateStore / SwiftLotusProcessManager**: Manage worker metadata, status files, CLI process lifecycle, and reload signals.
 *   **GatewayRouteTable**: Maintains distributed uid/group route indexes for register-style gateway deployments.
+*   **SwiftLotusHTTPClient / SwiftLotusEventBus / SwiftLotusScheduler / SwiftLotusMetrics**: Small v1 ecosystem components for outbound calls, local pub/sub, scheduled tasks, and process-local observability.
 
 ## 📄 License
 
