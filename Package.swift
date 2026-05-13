@@ -22,6 +22,7 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.65.0"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.5.0"),
         .package(url: "https://github.com/apple/swift-nio-ssl.git", from: "2.26.0"),
+        .package(url: "https://github.com/swiftlang/swift-docc-plugin.git", from: "1.5.0"),
     ],
     targets: [
         // Core Target
