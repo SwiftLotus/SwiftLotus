@@ -14,7 +14,7 @@ Use SwiftLotus when you need:
 - Backpressure, idle connection cleanup, connection limits, and lightweight metrics.
 - Small ecosystem helpers such as outbound TCP clients, HTTP clients, event bus, timers, and schedulers.
 
-Start with <doc:UsageGuide> for an end-to-end guide from installation to production operation.
+Start with <doc:UsageGuide> for an end-to-end guide from installation to production operation. Use <doc:APIReferenceGuide> for API responsibilities and <doc:ProtocolGuide> for protocol selection and custom framing.
 
 ## Topics
 
@@ -22,6 +22,10 @@ Start with <doc:UsageGuide> for an end-to-end guide from installation to product
 
 - <doc:UsageGuide>
 - <doc:UsageGuideZH>
+- <doc:APIReferenceGuide>
+- <doc:APIReferenceGuideZH>
+- <doc:ProtocolGuide>
+- <doc:ProtocolGuideZH>
 
 ### Core Server Runtime
 
